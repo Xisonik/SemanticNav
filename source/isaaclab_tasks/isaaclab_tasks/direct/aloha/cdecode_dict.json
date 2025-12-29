@@ -1,0 +1,29 @@
+{
+  "names": {
+    "air": 0,
+    "box": 1,
+    "cabinet": 2,
+    "chair": 3,
+    "clock": 4,
+    "crestwood": 5,
+    "desk": 6,
+    "ladder": 7,
+    "lamp": 8,
+    "standard": 9,
+    "table": 10,
+    "teddy": 11,
+    "trashcan": 12,
+    "vase": 13,
+    "yucca": 14
+  },
+  "colors": {
+    "black": 0,
+    "brown": 1,
+    "gray": 2,
+    "green": 3,
+    "orange": 4,
+    "red": 5,
+    "yellow": 6,
+    "white": 7
+  }
+}
