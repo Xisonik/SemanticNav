@@ -319,8 +319,8 @@ class SharedGraphModule(nn.Module):
 # ---------------------------------------------------------------------
 # CLI аргументы / seed
 # ---------------------------------------------------------------------
-EVAL = False
-# EVAL = True
+# EVAL = False
+EVAL = True
 
 set_seed(42)
 
@@ -551,12 +551,14 @@ agent = SAC(
 if not EVAL:
     cfg_trainer = {"timesteps": 330000}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac_graph/25-12-31_21-39-22-853326_SAC/checkpoints/agent_60000.pt"
+    agent.load(checkpoint_path)
     trainer.train()
 else:
-    cfg_trainer = {"timesteps": 700}
+    cfg_trainer = {"timesteps": 1000}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
-    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac_graph/25-12-29_00-52-16-027922_SAC/checkpoints/agent_83000.pt"
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac_graph/26-01-01_16-37-44-016775_SAC/checkpoints/agent_280000.pt"
     agent.load(checkpoint_path)
 
     trainer.eval()

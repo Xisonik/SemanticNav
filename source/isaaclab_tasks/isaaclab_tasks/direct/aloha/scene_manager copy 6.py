@@ -382,8 +382,8 @@ class SceneManager:
             'yellow':[1,1,0],'orange':[1,0.65,0],'purple':[0.5,0,0.5],
             'white':[1,1,1],'gray':[0.5,0.5,0.5],'black':[0,0,0],'brown':[0.6,0.3,0],
         }
-        self.colors_dict = {k: base[k] for k in ['red','green','blue','yellow','gray','black','brown', 'orange', 'white']}  # любое подмножество
-
+        # self.colors_dict = {k: base[k] for k in ['red','green','blue','yellow','gray','black','brown']}  # любое подмножество
+        self.colors_dict = {k: base[k] for k in ['red','green','blue','yellow','gray','black','brown', 'orange']}  # любое подмножество
         # --- Векторизованная структура данных ---
         self.num_total_objects = sum(obj['count'] for obj in self.config)
         self.object_ids = torch.zeros(1, self.num_total_objects, device=self.device)
@@ -1289,7 +1289,6 @@ class SceneManager:
         obstacle_pos = torch.where(is_floor_obstacle.unsqueeze(-1), obstacle_pos_all, inf_pos)
 
         mean_dist_with_shift = mean_dist + 1.31
-        
         # print("mean_dist_with_shift", mean_dist_with_shift)
         radii = torch.normal(mean=mean_dist_with_shift, std=0.1, size=(num_envs, 1), device=self.device).clamp_(min_dist, max_dist)
         # print("radii: ", radii)
@@ -1313,7 +1312,7 @@ class SceneManager:
             fallback_pos = goal_pos[:, :2] + torch.tensor([max_dist, 0.0], device=self.device)
             final_robot_positions[no_valid_pos_mask] = fallback_pos[no_valid_pos_mask]
 
-        # final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
+        final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
 
         direction_to_goal = goal_pos[:, :2] - final_robot_positions
         base_yaw = torch.atan2(direction_to_goal[:, 1], direction_to_goal[:, 0])
@@ -1322,29 +1321,22 @@ class SceneManager:
         # print(error)
         final_yaw = base_yaw + error #+ torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
         # print(final_yaw)
-        # final_yaw = torch.zeros_like(base_yaw + error, device=self.device)
-        # try:
-        #     # Пытаемся получить ориентации из config
-        #     final_yaw = config["orientation"]
-        # except KeyError as e:
-        #     # Выводим содержимое словаря config для отладки
-        #     print(f"[ERROR] KeyError in place_robot_for_goal: {e}")
-        #     print(f"[DEBUG] Config dictionary keys: {list(config.keys())}")
-        #     print(f"[DEBUG] Config dictionary content: {config}")
+        final_yaw = torch.zeros_like(base_yaw + error, device=self.device)
+        try:
+            # Пытаемся получить ориентации из config
+            final_yaw = config["orientation"]
+        except KeyError as e:
+            # Выводим содержимое словаря config для отладки
+            print(f"[ERROR] KeyError in place_robot_for_goal: {e}")
+            print(f"[DEBUG] Config dictionary keys: {list(config.keys())}")
+            print(f"[DEBUG] Config dictionary content: {config}")
             
-        #     # Создаем тензор нулей в качестве fallback
-        #     final_yaw = torch.zeros(num_envs, device=self.device)
-        #     print(f"[INFO] Using zero orientations as fallback")
+            # Создаем тензор нулей в качестве fallback
+            final_yaw = torch.zeros(num_envs, device=self.device)
+            print(f"[INFO] Using zero orientations as fallback")
         # print(final_yaw)
-        if mean_dist >= 3:
-            # Варианты выбора
-            values = [0, math.pi]
-
-            # Случайный выбор
-            random_value = random.choice(values)
-            final_yaw = torch.full_like(base_yaw + error, random_value, device=self.device)
-            # final_yaw = torch.zeros_like(base_yaw + error, device=self.device)
-            final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
+        # final_yaw = torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
+        final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
         robot_quats = torch.zeros(num_envs, 4, device=self.device)
         robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
         robot_quats[:, 3] = torch.sin(final_yaw / 2.0)

@@ -1043,7 +1043,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.has_contact = has_contact
         died = torch.logical_or(
             torch.logical_or(
-                self.goal_reached(), # torch.logical_or(self.goal_reached(), self.out_of_bounds()),
+                torch.logical_or(self.goal_reached(), self.out_of_bounds()),
                 has_contact),
             time_out,
         )
