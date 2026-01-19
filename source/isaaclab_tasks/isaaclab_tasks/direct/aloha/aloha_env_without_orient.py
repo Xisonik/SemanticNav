@@ -36,7 +36,6 @@ from .asset_manager import AssetManager
 import omni.kit.commands
 import omni.usd
 import datetime
-import torch.nn.functional as F
 # from torch.utils.tensorboard import SummaryWriter
 ##
 # Pre-defined configs
@@ -91,8 +90,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     num_total_objects = 14 #36 12 num_total_objects * 5
 
     observation_space = gym.spaces.Dict({
-        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(512*1+4+2,), dtype=np.float32),  #518
-        "orientation": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(1,), dtype=np.float32),
+        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(512*1+6,), dtype=np.float32),  #518
         "graph": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(24*17,), dtype=np.float32)
     })
     # observation_space = gym.spaces.Dict({
@@ -268,9 +266,9 @@ class WheeledRobotEnv(DirectRLEnv):
         self.history_len = torch.zeros(self.num_envs, device=self.device)
         self._step_update_counter = 0
         self.mean_radius = 3.5
-        self.max_angle_error = 0.3 * torch.pi
+        self.max_angle_error = 0.5 * torch.pi
         self.cur_angle_error = torch.pi * 0.3
-        self.warm = False
+        self.warm = True
         self.warm_len = 1000
         self.without_imitation = self.warm_len / 2
         self.without_imitation_log = False
@@ -544,60 +542,22 @@ class WheeledRobotEnv(DirectRLEnv):
 
         # Вычисляем угол между векторами
         angle = torch.acos(cos_angle)
-        angle = angle
+        angle = angle.unsqueeze(-1)
         # print()
         self.memory_manager.update(image_embeddings, self.velocities)
         embedding = self.memory_manager.get_observations(m=self.history_length_for_memory)
         # print("scene_embeddings", self.scene_embeddings)
         # print(len(self.scene_embeddings), len(self.scene_embeddings[0]))
         obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
-        # print(len(obs_img), len(obs_img[0])), self.to_local(self._desired_pos_w)
+        # print(len(obs_img), len(obs_img[0]))
 
-        robot_quat = self._robot.data.root_quat_w # [num_envs, 4]
-
-        # Конвертируем quaternion → yaw
-        # ВНИМАНИЕ: Isaac Lab использует (w,x,y,z) или (x,y,z,w) - ПРОВЕРЬТЕ!
-        w, x, y, z = robot_quat[:, 0], robot_quat[:, 1], robot_quat[:, 2], robot_quat[:, 3]
-        robot_yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y**2 + z**2))
-        robot_yaw = angle
-        # print("yaw ", robot_yaw.unsqueeze(1))
-        # print("yaw ", robot_yaw.unsqueeze(1))
-        # print("ahspe ", obs_img.shape, robot_yaw.shape)
-        local_forward = torch.tensor([1.0, 0.0, 0.0], device=root_quat_w.device, dtype=root_quat_w.dtype)
-        local_forward = local_forward.unsqueeze(0).repeat(root_quat_w.shape[0], 1)  # [N, 3]
-
-        # Вектор взгляда в мировых координатах
-        forward_w = self.quat_rotate(root_quat_w, local_forward)  # [N, 3]
-
-        # Вектор от робота к цели
-        root_pos_w = self._robot.data.root_pos_w  # [N, 3]
-        to_goal = self._desired_pos_w - root_pos_w  # [N, 3]
-
-        # Работаем только с XY (игнорируем Z)
-        forward_xy = forward_w[:, :2]  # [N, 2]
-        to_goal_xy = to_goal[:, :2]    # [N, 2]
-
-        # Нормализуем
-        forward_xy_norm = F.normalize(forward_xy, dim=1)  # [N, 2]
-        to_goal_xy_norm = F.normalize(to_goal_xy, dim=1)  # [N, 2]
-
-        # КЛЮЧЕВОЙ МОМЕНТ: Знаковый угол через cross product + atan2
-        # Cross product в 2D: a × b = a_x * b_y - a_y * b_x
-        cross = forward_xy_norm[:, 0] * to_goal_xy_norm[:, 1] - forward_xy_norm[:, 1] * to_goal_xy_norm[:, 0]
-
-        # Dot product для косинуса
-        dot = torch.sum(forward_xy_norm * to_goal_xy_norm, dim=1)
-
-        # Знаковый угол [-π, π]
-        relative_angle = torch.atan2(cross, dot)  # [N]
         obs = {
             "img": obs_img,          # нормализуем
-            "orientation": robot_yaw.unsqueeze(1),
             "graph": self.scene_embeddings # НЕ нормализуем
         }
         self.previous_ang_vel = self.angular_speed
         # log_embedding_stats(image_embeddings) self._desired_pos_w[:, :2],
-
+        
         observations = {"policy": obs}
         if self.DEBUG_TIME:
             end_time = time.time()
@@ -605,7 +565,6 @@ class WheeledRobotEnv(DirectRLEnv):
             self.operations_times["camera_emb"] = cemb_end_time - cemb_start_time
             self.operations_times["get_graph"] = gr_end_time - gr_start_time
             self.operations_times["make_observ"] = end_time - start_time
-
         return observations
 
     # as they are not affected by the observation space change.
@@ -644,7 +603,7 @@ class WheeledRobotEnv(DirectRLEnv):
             self.turn_off_controller_step += 1
             linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
-        linear_speed = torch.zeros_like(linear_speed, device=self.device)
+        # linear_speed = torch.zeros_like(linear_speed, device=self.device)
         self.angular_speed = angular_speed
         self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
         # if self.tensorboard_step % 4 ==0:
@@ -694,7 +653,6 @@ class WheeledRobotEnv(DirectRLEnv):
 
         moves = torch.clamp(5 * (self.previous_distance_error - r_error), min=0, max=1) + \
                     torch.clamp(5 * (self.previous_angle_error - a_error), min=0, max=1)
-
         # print(self.previous_angle_error, a_error)
         turnes =  torch.clamp(2 * math.pi * (self.previous_angle_error - a_error) / 180 , min=-1, max=1)
         # turnes = torch.zeros_like(a_error)
@@ -844,7 +802,7 @@ class WheeledRobotEnv(DirectRLEnv):
         goal_bonus = 2.0 * goal_reached.float()
         out = self.out_of_bounds()
         # print(turnes, goal_bonus, out.float())
-        reward = -0.01 + turnes + collision_penalty + timeout_penalty + goal_bonus - 3 * out.float()
+        reward = -0.01 + turnes + collision_penalty + timeout_penalty + goal_bonus - 1.5 * out.float() + moves_reward
         # print(reward)
 
         died, _ = self._get_dones(self.my_episode_lenght - 1, inner=True)
@@ -949,7 +907,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # self.step_counter = torch.where(returns, torch.zeros_like(self.step_counter), self.step_counter)
         # if torch.any(facing_goal):
         #     print("facing: ", facing_goal)
-        returns = facing_goal #torch.logical_and(close_enough, facing_goal)
+        returns = torch.logical_and(close_enough, facing_goal)  #facing_goal
         # if torch.any(returns):
         #     print(close_enough, facing_goal)
         # print("returns", returns)
@@ -1085,7 +1043,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.has_contact = has_contact
         died = torch.logical_or(
             torch.logical_or(
-                torch.logical_or(self.goal_reached(), self.out_of_bounds()),
+                self.goal_reached(), # torch.logical_or(self.goal_reached(), self.out_of_bounds()),
                 has_contact),
             time_out,
         )
@@ -1115,6 +1073,7 @@ class WheeledRobotEnv(DirectRLEnv):
         num_envs = len(env_ids)
 
         possible_orientations = torch.tensor([0.0, math.pi/2, -math.pi/2, math.pi], device=self.device)
+        possible_orientations = torch.tensor([0.0], device=self.device)
 
         # Случайный выбор угла для каждого окружения в env_ids
         E = len(env_ids)
@@ -1181,7 +1140,7 @@ class WheeledRobotEnv(DirectRLEnv):
             elif self.cur_step < self.warm_len:
                 if self.cur_step < self.without_imitation:
                     self.turn_on_controller = False
-                else:
+                elif self.use_controller:
                     if not self.without_imitation_log:
                         print("start imitation on warm stage")
                         self.without_imitation_log = True
@@ -1381,6 +1340,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # print("self.success_rate ", self.success_rate)
         # if self.mean_radius > 3.3:
         #     max_angle_error = torch.pi * 0.8
+        # print(self.mean_radius, self.cur_step, self.warm, self.warm_len)
         if self.warm and self.cur_step >= self.warm_len:
             self.warm = False
             self.mean_radius = self.start_mean_radius

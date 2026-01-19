@@ -390,6 +390,17 @@ class Critic(DeterministicMixin, Model):
         self.img_dim = int(observation_space["img"].shape[0])
 
         mlp_in = self.img_dim + GRAPH_EMB_DIM + self.num_actions
+        self.orientation_bins = 36
+        
+        self.localization_head = nn.Sequential(
+            nn.Linear(self.img_dim + GRAPH_EMB_DIM, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.orientation_bins)
+        ).to(device)
+
         self.net = nn.Sequential(
             nn.Linear(mlp_in, 512),
             nn.ReLU(),
@@ -397,23 +408,45 @@ class Critic(DeterministicMixin, Model):
             nn.ReLU(),
             nn.Linear(256, 1)
         ).to(device)
+            
+
 
     def compute(self, inputs, role):
         B = inputs["states"].shape[0]
         states = unflatten_tensorized_space(self.observation_space, inputs["states"])
-        img = states["img"].to(self.device)            # [B, img_dim]
-        graph_flat = states["graph"].to(self.device)   # [B, N*24]
+        img = states["img"].to(self.device)
+        graph_flat = states["graph"].to(self.device)
         actions = inputs["taken_actions"].to(self.device)
-
-        if self.train_graph:
-            graph_emb = self.shared_graph(graph_flat)
-        else:
-            with torch.no_grad():
-                graph_emb = self.shared_graph(graph_flat)
-
+        
+        graph_emb = self.shared_graph(graph_flat)
+        
+        # Q-value
         x = torch.cat([img, graph_emb, actions], dim=-1)
         q = self.net(x)
-        return q, {}
+        
+        # ============ ДОБАВЬТЕ ЭТО ============
+        outputs = {}
+        # Извлекаем image embedding (первые 512 элементов)
+        img_emb = img[:, :self.img_dim]
+        
+        # Предсказываем ориентацию
+        orientation_logits = self.localization_head(
+            torch.cat([img_emb, graph_emb], dim=-1)
+        )
+        
+        # Ground truth yaw из observation
+        robot_yaw = states["orientation"].to(self.device)  # [B]
+        
+        # Конвертируем угол в bin label
+        normalized = (robot_yaw + torch.pi) % (2 * torch.pi)
+        bin_size = (2 * torch.pi) / self.orientation_bins
+        orientation_labels = (normalized / bin_size).long()
+        orientation_labels = torch.clamp(orientation_labels, 0, self.orientation_bins - 1)
+        
+        outputs['orientation_logits'] = orientation_logits
+        outputs['orientation_label'] = orientation_labels
+        
+        return q, outputs
 
 
 from skrl.resources.preprocessors.torch.running_standard_scaler import RunningStandardScaler

@@ -30,9 +30,6 @@ GRAPH_EMB_DIM = 128           # выход графового энкодера
 # Если цель у тебя всегда первая в encode_scene_graph — оставляй 0.
 GOAL_NODE_INDEX = 0
 
-# Evaluation mode flag
-EVAL = False
-
 # ---------------------------------------------------------------------
 # Edge builders
 # ---------------------------------------------------------------------
@@ -229,117 +226,119 @@ class FrozenCLIPNameColorEncoder(nn.Module):
         payload = torch.load(embeddings_path, map_location="cpu")
         name_embs = payload.get("name_embs", None)
         color_embs = payload.get("color_embs", None)
-
         if name_embs is None or color_embs is None:
-            raise ValueError(f"embeddings_path='{embeddings_path}' must contain 'name_embs' and 'color_embs'.")
+            raise ValueError(f"Bad embeddings file: expected keys 'name_embs' and 'color_embs' in {embeddings_path}")
 
-        # Замороженные эмбеддинги
-        self.register_buffer("name_embs", name_embs)   # [N_names, 512]
-        self.register_buffer("color_embs", color_embs) # [N_colors, 512]
+        self.register_buffer("name_embs", name_embs.float(), persistent=False)    # [N_names, 512]
+        self.register_buffer("color_embs", color_embs.float(), persistent=False) # [N_colors, 512]
 
-        # Обучаемый проектор 512->TEXT_EMB_DIM (общий для имени и цвета)
-        self.projector = nn.Sequential(
-            nn.Linear(512, 256),
+        self.proj = nn.Sequential(
+            nn.Linear(self.name_embs.shape[-1], 128),
             nn.ReLU(inplace=True),
-            nn.Linear(256, text_dim),
+            nn.Linear(128, text_dim),
         )
 
-    def forward(self, name_ids: torch.Tensor, color_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, name_idx: torch.Tensor, color_bits_or_idx: torch.Tensor) -> torch.Tensor:
         """
-        name_ids:  [B*N] int
-        color_ids: [B*N] int
-        return:   [B*N, text_dim]
+        name_idx:
+          - [B, N] (индекс)  или [B, N, K] (one-hot/logits)
+        color_bits_or_idx:
+          - [B, N] (индекс)  или [B, N, 3] (биты 0/1 -> id 0..6)
+
+        return: [B, N, text_dim]
         """
-        ne = self.name_embs[name_ids]   # [B*N, 512]
-        ce = self.color_embs[color_ids] # [B*N, 512]
-        concat = (ne + ce) / 2.0        # усредняем (можно cat, если хочешь concat)
-        return self.projector(concat)   # [B*N, text_dim]
+        if name_idx.dim() == 3:
+            name_idx = name_idx.argmax(dim=-1)
+        name_idx = name_idx.long()
+
+        if color_bits_or_idx.dim() == 3 and color_bits_or_idx.size(-1) == 3:
+            bits = color_bits_or_idx.round().long().clamp(0, 1)
+            # (4,2,1) -> 1..7, затем -1 -> 0..6
+            color_idx = (bits[..., 0] * 4 + bits[..., 1] * 2 + bits[..., 2]) - 1
+        else:
+            color_idx = color_bits_or_idx.round().long()
+
+        name_idx = name_idx.clamp(0, self.name_embs.shape[0] - 1)
+        color_idx = color_idx.clamp(0, self.color_embs.shape[0] - 1)
+
+        emb_name = self.name_embs[name_idx]       # [B,N,512]
+        emb_color = self.color_embs[color_idx]    # [B,N,512]
+        emb = 0.5 * (emb_name + emb_color)        # [B,N,512]
+        return self.proj(emb)                     # [B,N,text_dim]
 
 
 class SharedGraphModule(nn.Module):
-    """Общий графовый энкодер, который обучается только от градиентов Value функции (критика) в PPO.
-
-    Принимает graph_flat [B, N*24], возвращает [B, GRAPH_EMB_DIM].
-    """
-    def __init__(
-        self,
-        embeddings_path: str,
-        num_nodes: int = NUM_GRAPH_NODES,
-        per_object_dim: int = PER_OBJECT_DIM,
-        text_dim: int = TEXT_EMB_DIM,
-    ):
+    """Общий графовый энкодер: node_raw (24) + text_emb (16) -> GAT -> graph_emb (128)."""
+    def __init__(self, embeddings_path: str, num_nodes: int = NUM_GRAPH_NODES,
+                 per_object_dim: int = PER_OBJECT_DIM, text_dim: int = TEXT_EMB_DIM):
         super().__init__()
         self.num_nodes = num_nodes
         self.per_object_dim = per_object_dim
         self.text_dim = text_dim
 
-        # Замороженный CLIP-энкодер для имени/цвета
-        self.text_encoder = FrozenCLIPNameColorEncoder(embeddings_path, text_dim=text_dim)
-
-        # Графовый энкодер
-        # На вход узла: per_object_dim + text_dim
-        node_in = per_object_dim + text_dim
+        self.text_encoder = FrozenCLIPNameColorEncoder(embeddings_path=embeddings_path, text_dim=text_dim)
         self.graph_encoder = SceneGraphGATEncoder(
             num_nodes=num_nodes,
-            node_in_dim=node_in,
+            node_in_dim=per_object_dim + text_dim,
             hidden_dim=128,
             out_dim=GRAPH_EMB_DIM,
             num_layers=2,
             heads=2,
             dropout=0.1,
+            goal_index=GOAL_NODE_INDEX,
         )
 
-    def forward(self, graph_flat: torch.Tensor) -> torch.Tensor:
+    def _build_node_features(self, graph_flat: torch.Tensor) -> torch.Tensor:
         """
-        graph_flat: [B, N * per_object_dim]
-        return:    [B, GRAPH_EMB_DIM]
+        graph_flat: [B, N * 24]
+        return:    [B*N, 24+text_dim]
         """
         B = graph_flat.shape[0]
         N = self.num_nodes
-        D = self.per_object_dim
+        node_raw = graph_flat.view(B, N, self.per_object_dim)  # [B,N,24]
 
-        # reshape -> [B, N, D]
-        graph_3d = graph_flat.view(B, N, D)
+        # По твоему encode_scene_graph:
+        #  - name_code: index 20
+        #  - color_code: 3 бита: 21:24  (или может быть индекс — encoder поддерживает оба)
+        name_idx = node_raw[..., 20]
+        color_bits = node_raw[..., 21:24]
 
-        # Извлекаем name_id, color_id (первые 2 канала, int)
-        name_ids = graph_3d[:, :, 0].long()   # [B, N]
-        color_ids = graph_3d[:, :, 1].long()  # [B, N]
+        text_emb = self.text_encoder(name_idx, color_bits)     # [B,N,text_dim]
+        full_node = torch.cat([node_raw, text_emb], dim=-1)    # [B,N,24+text_dim]
+        return full_node.view(B * N, -1)
 
-        # Остальные фичи (pos, ori, vel, ...)
-        other_feats = graph_3d[:, :, 2:]      # [B, N, D-2]
-
-        # Получаем текстовые эмбеддинги
-        name_ids_flat = name_ids.reshape(-1)    # [B*N]
-        color_ids_flat = color_ids.reshape(-1)  # [B*N]
-        text_emb_flat = self.text_encoder(name_ids_flat, color_ids_flat)  # [B*N, text_dim]
-
-        # Объединяем
-        other_flat = other_feats.reshape(B * N, -1)  # [B*N, D-2]
-        node_feats = torch.cat([text_emb_flat, other_flat], dim=-1)  # [B*N, text_dim + D-2]
-
-        # Энкодер
-        graph_emb = self.graph_encoder(node_feats, batch_size=B)  # [B, GRAPH_EMB_DIM]
-        return graph_emb
-
+    def forward(self, graph_flat: torch.Tensor) -> torch.Tensor:
+        """
+        graph_flat: [B, N*24]
+        return:    [B, GRAPH_EMB_DIM]
+        """
+        B = graph_flat.shape[0]
+        node_feats = self._build_node_features(graph_flat)
+        return self.graph_encoder(node_feats, batch_size=B)
 
 # ---------------------------------------------------------------------
-# PPO Models: Policy (Actor) и Value (Critic)
+# CLI аргументы / seed
+# ---------------------------------------------------------------------
+EVAL = False
+# EVAL = True
+
+set_seed(42)
+
+# ---------------------------------------------------------------------
+# Models для PPO
 # ---------------------------------------------------------------------
 
 class Policy(GaussianMixin, Model):
-    """PPO Policy (Actor): π(a|s). 
-    
-    Графовый энкодер используется в режиме no_grad, т.к. обучается только от критика.
-    """
+    """Policy (Actor): принимает dict-obs: {img, graph}. 
+    В PPO графовый энкодер ОБУЧАЕТСЯ вместе с policy."""
     def __init__(self, observation_space, action_space, device, shared_graph: SharedGraphModule,
                  clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std)
         self.device = device
 
-        # ВАЖНО: shared_graph не регистрируем как submodule в политике,
-        # чтобы оптимизатор политики не трогал его параметры.
-        self.__dict__["shared_graph"] = shared_graph
+        # В PPO shared_graph регистрируем как submodule policy - он будет обучаться!
+        self.shared_graph = shared_graph
 
         # img — это "нормализуемая" часть
         self.img_dim = int(observation_space["img"].shape[0])
@@ -362,9 +361,8 @@ class Policy(GaussianMixin, Model):
         img = states["img"].to(self.device)          # [B, img_dim]
         graph_flat = states["graph"].to(self.device) # [B, N*24]
 
-        # Энкодер обучается только от критика -> для политики no_grad
-        with torch.no_grad():
-            graph_emb = self.shared_graph(graph_flat)  # [B, 128]
+        # В PPO графовый энкодер обучается через policy
+        graph_emb = self.shared_graph(graph_flat)  # [B, 128]
 
         x = torch.cat([img, graph_emb], dim=-1)
         mu = self.net(x)
@@ -372,19 +370,15 @@ class Policy(GaussianMixin, Model):
 
 
 class Value(DeterministicMixin, Model):
-    """PPO Value function: V(s). 
-    
-    Здесь shared_graph обучается (градиенты идут в него).
-    """
+    """Value function: V(s). Использует тот же shared_graph через no_grad."""
     def __init__(self, observation_space, action_space, device, shared_graph: SharedGraphModule,
                  clip_actions=False):
         Model.__init__(self, observation_space, action_space, device)
         DeterministicMixin.__init__(self, clip_actions)
         self.device = device
 
-        # Регистрируем shared_graph как submodule, чтобы его параметры обучались
-        # вместе с параметрами value function
-        self.shared_graph = shared_graph
+        # Value function НЕ обучает shared_graph - использует его через no_grad
+        self.__dict__["shared_graph"] = shared_graph
 
         self.img_dim = int(observation_space["img"].shape[0])
 
@@ -403,17 +397,14 @@ class Value(DeterministicMixin, Model):
         img = states["img"].to(self.device)            # [B, img_dim]
         graph_flat = states["graph"].to(self.device)   # [B, N*24]
 
-        # Графовый энкодер обучается здесь
-        graph_emb = self.shared_graph(graph_flat)  # [B, GRAPH_EMB_DIM]
+        # Value function не обучает graph
+        with torch.no_grad():
+            graph_emb = self.shared_graph(graph_flat)
 
         x = torch.cat([img, graph_emb], dim=-1)
-        value = self.net(x)
-        return value, {}
+        v = self.net(x)
+        return v, {}
 
-
-# ---------------------------------------------------------------------
-# Custom State Preprocessor
-# ---------------------------------------------------------------------
 
 class DictRunningStandardScaler(nn.Module):
     """
@@ -473,10 +464,9 @@ env = wrap_env(env)
 device = env.device
 
 # ---------------------------------------------------------------------
-# Memory (PPO использует RandomMemory, но размер определяется rollouts)
+# Memory для PPO
 # ---------------------------------------------------------------------
-memory = RandomMemory(memory_size=32 * 16, num_envs=env.num_envs, device=device)
-# 32 envs * 16 rollout steps = 512 samples per iteration
+memory = RandomMemory(memory_size=48, num_envs=env.num_envs, device=device)
 
 # ---------------------------------------------------------------------
 # Shared graph module (one instance)
@@ -489,7 +479,7 @@ shared_graph = SharedGraphModule(
 ).to(device)
 
 # ---------------------------------------------------------------------
-# Models for PPO
+# Models для PPO
 # ---------------------------------------------------------------------
 models = {
     "policy": Policy(env.observation_space, env.action_space, device, shared_graph=shared_graph),
@@ -500,11 +490,10 @@ models = {
 # PPO config
 # ---------------------------------------------------------------------
 cfg = PPO_DEFAULT_CONFIG.copy()
+cfg["rollouts"] = 48  # должно совпадать с memory_size
+cfg["learning_epochs"] = 5
+cfg["mini_batches"] = 8
 
-# Training parameters
-cfg["rollouts"] = 16                    # количество шагов для сбора данных
-cfg["learning_epochs"] = 8              # количество эпох обучения на одном rollout
-cfg["mini_batches"] = 4                 # количество мини-батчей
 cfg["discount_factor"] = 0.99           # gamma
 cfg["lambda"] = 0.95                    # GAE lambda
 
@@ -526,7 +515,6 @@ cfg["grad_norm_clip"] = 0.5             # gradient clipping
 cfg["value_preprocessor"] = None        # можно добавить нормализацию advantages
 cfg["advantages_clip"] = None           # можно добавить clipping для advantages
 
-# State preprocessor
 cfg["state_preprocessor"] = DictRunningStandardScaler
 cfg["state_preprocessor_kwargs"] = {
     "size": env.observation_space,              # ВАЖНО: полный dict-space
@@ -534,15 +522,10 @@ cfg["state_preprocessor_kwargs"] = {
     "device": device,
 }
 
-# Logging and checkpointing
 cfg["experiment"]["write_interval"] = 100
 cfg["experiment"]["checkpoint_interval"] = 1000
-cfg["experiment"]["directory"] = "logs/skrl/aloha_ppo_graph"
+cfg["experiment"]["directory"] = "logs/skrl/aloha_sac_graph"
 
-# Random timesteps (обычно 0 для PPO)
-cfg["random_timesteps"] = 0
-
-# Create PPO agent
 agent = PPO(
     models=models,
     memory=memory,
@@ -556,14 +539,17 @@ agent = PPO(
 # Trainer
 # ---------------------------------------------------------------------
 if not EVAL:
-    cfg_trainer = {"timesteps": 330000}
+    cfg_trainer = {"timesteps": 330000, "headless": True}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
+    # Если есть чекпоинт - раскомментируй:
+    # checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_graph/CHECKPOINT.pt"
+    # agent.load(checkpoint_path)
     trainer.train()
 else:
-    cfg_trainer = {"timesteps": 1000}
+    cfg_trainer = {"timesteps": 1000, "headless": True}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
-    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_graph/checkpoints/best_agent.pt"
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac_graph/CHECKPOINT.pt"
     agent.load(checkpoint_path)
 
     trainer.eval()

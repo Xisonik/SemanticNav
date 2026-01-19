@@ -3,15 +3,15 @@ import torch
 import torch.nn as nn
 
 # skrl / Isaac Lab imports
-from skrl.agents.torch.sac import SAC, SAC_DEFAULT_CONFIG
+from skrl.agents.torch.ppo import PPO_RNN as PPO, PPO_DEFAULT_CONFIG
 from skrl.envs.loaders.torch import load_isaaclab_env
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.memories.torch import RandomMemory
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
-from skrl.resources.preprocessors.torch import RunningStandardScaler, PartialRunningStandardScaler
+from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
-from skrl.utils.spaces.torch import unflatten_tensorized_space
+from skrl.utils.spaces.torch import unflatten_tensorized_space, flatten_tensorized_space
 
 # GNN
 from torch_geometric.nn import GATv2Conv, global_mean_pool
@@ -25,6 +25,11 @@ NUM_GRAPH_NODES = 17          # M
 PER_OBJECT_DIM = 24           # столько фич на объект из encode_scene_graph
 TEXT_EMB_DIM = 16             # размер текстового эмбеддинга (имя+цвет)
 GRAPH_EMB_DIM = 128           # выход графового энкодера
+
+# LSTM settings
+LSTM_HIDDEN_SIZE = 256
+LSTM_NUM_LAYERS = 1
+LSTM_SEQUENCE_LENGTH = 16     # длина последовательности для LSTM
 
 # В графе "цель ↔ объекты" нужно знать индекс узла цели.
 # Если цель у тебя всегда первая в encode_scene_graph — оставляй 0.
@@ -325,99 +330,223 @@ EVAL = False
 set_seed(42)
 
 # ---------------------------------------------------------------------
-# Models
+# Models для PPO с LSTM
 # ---------------------------------------------------------------------
 
-class StochasticActor(GaussianMixin, Model):
-    """Actor: принимает dict-obs: {img, graph}. Графовый энкодер НЕ обучается актором."""
+class Policy(GaussianMixin, Model):
+    """Policy (Actor) с LSTM: принимает dict-obs: {img, graph}. 
+    В PPO графовый энкодер ОБУЧАЕТСЯ вместе с policy."""
     def __init__(self, observation_space, action_space, device, shared_graph: SharedGraphModule,
-                 clip_actions=False, clip_log_std=True, min_log_std=-5, max_log_std=2):
+                 clip_actions=False, clip_log_std=True, min_log_std=-20, max_log_std=2,
+                 reduction="sum"):
         Model.__init__(self, observation_space, action_space, device)
-        GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std)
+        GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std, reduction)
         self.device = device
 
-        # ВАЖНО: shared_graph не регистрируем как submodule в акторе,
-        # чтобы актор-оптимизатор не трогал его параметры.
-        self.__dict__["shared_graph"] = shared_graph
+        # В PPO shared_graph регистрируем как submodule policy - он будет обучаться!
+        self.shared_graph = shared_graph
 
-        # img — это “нормализуемая” часть
+        # img — это "нормализуемая" часть
         self.img_dim = int(observation_space["img"].shape[0])
 
-        mlp_in = self.img_dim + GRAPH_EMB_DIM
-        self.net = nn.Sequential(
-            nn.Linear(mlp_in, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
+        # Feature extractor: img + graph -> embedding
+        feature_dim = self.img_dim + GRAPH_EMB_DIM
+        self.feature_net = nn.Sequential(
+            nn.Linear(feature_dim, 512),
+            nn.ELU(),
+            nn.Linear(512, LSTM_HIDDEN_SIZE),
+            nn.ELU()
+        ).to(device)
+
+        # LSTM layer
+        # ВАЖНО: PPO_RNN автоматически определит тип по классу слоя (nn.LSTM)
+        # Если нужен GRU - используйте nn.GRU, для vanilla RNN - nn.RNN
+        self.lstm = nn.LSTM(
+            input_size=LSTM_HIDDEN_SIZE,
+            hidden_size=LSTM_HIDDEN_SIZE,
+            num_layers=LSTM_NUM_LAYERS,
+            batch_first=True  # input shape: (batch, seq, feature)
+        ).to(device)
+
+        # Output head
+        self.output_net = nn.Sequential(
+            nn.Linear(LSTM_HIDDEN_SIZE, 256),
+            nn.ELU(),
             nn.Linear(256, self.num_actions),
             nn.Tanh()
         ).to(device)
 
         self.log_std_parameter = nn.Parameter(torch.zeros(self.num_actions, device=device))
 
+    # def get_specification(self):
+    #     """Указываем, что модель использует RNN.
+        
+    #     PPO_RNN автоматически определит тип RNN (LSTM/GRU/RNN) по классу слоя в модели:
+    #     - nn.LSTM → использует LSTM логику (как в этой модели)
+    #     - nn.GRU → использует GRU логику  
+    #     - nn.RNN → использует vanilla RNN логику
+        
+    #     Ключ "rnn" в спецификации нужен только чтобы указать sequence_length и sizes.
+    #     """
+    #     return {
+    #         "rnn": {
+    #             "sequence_length": LSTM_SEQUENCE_LENGTH,
+    #             "sizes": [LSTM_HIDDEN_SIZE, LSTM_NUM_LAYERS],  # [hidden_size, num_layers]
+    #         }
+    #     }
+
     def compute(self, inputs, role):
-        B = inputs["states"].shape[0]
-        states = unflatten_tensorized_space(self.observation_space, inputs["states"])
-        img = states["img"].to(self.device)          # [B, img_dim]
-        graph_flat = states["graph"].to(self.device) # [B, N*24]
-        # print("graph_flat ", graph_flat)
+        # Получаем состояния
+        states = inputs["states"]
+        terminated = inputs.get("terminated", None)
+        hidden_states = inputs.get("rnn", [None, None])
+        
+        # Unflatten dict observation
+        B = states.shape[0]
+        states_dict = unflatten_tensorized_space(self.observation_space, states)
+        img = states_dict["img"].to(self.device)          # [B, img_dim]
+        graph_flat = states_dict["graph"].to(self.device) # [B, N*24]
 
-        # Энкодер обучает критик -> для актора no_grad
-        with torch.no_grad():
-            graph_emb = self.shared_graph(graph_flat)  # [B, 128]
+        # Encode graph (с градиентами для policy)
+        graph_emb = self.shared_graph(graph_flat)  # [B, 128]
 
+        # Combine features
         x = torch.cat([img, graph_emb], dim=-1)
-        mu = self.net(x)
-        return mu, self.log_std_parameter, {}
+        features = self.feature_net(x)  # [B, LSTM_HIDDEN_SIZE]
+
+        # Проверяем формат hidden states
+        # hidden_states может быть:
+        # 1. [h, c] где h и c это тензоры
+        # 2. None для обоих
+        if hidden_states[0] is None or hidden_states[1] is None:
+            # Инициализируем hidden states
+            h = torch.zeros(LSTM_NUM_LAYERS, B, LSTM_HIDDEN_SIZE, 
+                          device=self.device, dtype=features.dtype)
+            c = torch.zeros(LSTM_NUM_LAYERS, B, LSTM_HIDDEN_SIZE,
+                          device=self.device, dtype=features.dtype)
+        else:
+            h, c = hidden_states
+            # Убеждаемся, что они правильной формы [num_layers, B, hidden_size]
+            if h.dim() == 2:  # [B, hidden_size]
+                h = h.unsqueeze(0)  # [1, B, hidden_size]
+            if c.dim() == 2:
+                c = c.unsqueeze(0)
+
+        # LSTM forward
+        # features: [B, LSTM_HIDDEN_SIZE] -> unsqueeze -> [B, 1, LSTM_HIDDEN_SIZE]
+        features = features.unsqueeze(1)  # добавляем sequence dimension
+        
+        rnn_output, (h_new, c_new) = self.lstm(features, (h, c))
+        # rnn_output: [B, 1, LSTM_HIDDEN_SIZE]
+        
+        rnn_output = rnn_output.squeeze(1)  # [B, LSTM_HIDDEN_SIZE]
+
+        # Сбрасываем hidden states на terminated эпизодах
+        if terminated is not None:
+            terminated = terminated.view(-1, 1)  # [B, 1]
+            # h_new, c_new: [num_layers, B, hidden_size]
+            h_new = h_new * (1 - terminated).transpose(0, 1).unsqueeze(0)
+            c_new = c_new * (1 - terminated).transpose(0, 1).unsqueeze(0)
+
+        # Output
+        mu = self.output_net(rnn_output)
+
+        return mu, self.log_std_parameter, {"rnn": [h_new, c_new]}
 
 
-class Critic(DeterministicMixin, Model):
-    """Critic: Q(s,a). Здесь shared_graph обучается (градиенты идут в него)."""
+class Value(DeterministicMixin, Model):
+    """Value function с LSTM: V(s). Использует тот же shared_graph через no_grad."""
     def __init__(self, observation_space, action_space, device, shared_graph: SharedGraphModule,
-                 clip_actions=False, train_graph: bool = True):
+                 clip_actions=False):
         Model.__init__(self, observation_space, action_space, device)
         DeterministicMixin.__init__(self, clip_actions)
         self.device = device
 
-        # В critic_1 train_graph=True: shared_graph обучается.
-        # В critic_2 и target critics train_graph=False: shared_graph используется в no_grad().
-        self.train_graph = bool(train_graph)
-
-        # НЕ регистрируем как submodule, чтобы избежать двойного шага оптимизатора,
-        # если shared_graph будет привязан к нескольким критикам.
+        # Value function НЕ обучает shared_graph - использует его через no_grad
         self.__dict__["shared_graph"] = shared_graph
 
         self.img_dim = int(observation_space["img"].shape[0])
 
-        mlp_in = self.img_dim + GRAPH_EMB_DIM + self.num_actions
-        self.net = nn.Sequential(
-            nn.Linear(mlp_in, 512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.ReLU(),
+        # Feature extractor
+        feature_dim = self.img_dim + GRAPH_EMB_DIM
+        self.feature_net = nn.Sequential(
+            nn.Linear(feature_dim, 512),
+            nn.ELU(),
+            nn.Linear(512, LSTM_HIDDEN_SIZE),
+            nn.ELU()
+        ).to(device)
+
+        # LSTM layer
+        # ВАЖНО: PPO_RNN автоматически определит тип по классу слоя (nn.LSTM)
+        self.lstm = nn.LSTM(
+            input_size=LSTM_HIDDEN_SIZE,
+            hidden_size=LSTM_HIDDEN_SIZE,
+            num_layers=LSTM_NUM_LAYERS,
+            batch_first=True
+        ).to(device)
+
+        # Output head
+        self.output_net = nn.Sequential(
+            nn.Linear(LSTM_HIDDEN_SIZE, 256),
+            nn.ELU(),
             nn.Linear(256, 1)
         ).to(device)
 
+    # def get_specification(self):
+    #     """Указываем, что модель использует RNN.
+        
+    #     PPO_RNN автоматически определит тип RNN (LSTM/GRU/RNN) по классу слоя в модели.
+    #     """
+    #     return {
+    #         "rnn": {
+    #             "sequence_length": LSTM_SEQUENCE_LENGTH,
+    #             "sizes": [LSTM_HIDDEN_SIZE, LSTM_NUM_LAYERS],
+    #         }
+    #     }
+
     def compute(self, inputs, role):
-        B = inputs["states"].shape[0]
-        states = unflatten_tensorized_space(self.observation_space, inputs["states"])
-        img = states["img"].to(self.device)            # [B, img_dim]
-        graph_flat = states["graph"].to(self.device)   # [B, N*24]
-        actions = inputs["taken_actions"].to(self.device)
+        states = inputs["states"]
+        terminated = inputs.get("terminated", None)
+        hidden_states = inputs.get("rnn", [None, None])
+        
+        B = states.shape[0]
+        states_dict = unflatten_tensorized_space(self.observation_space, states)
+        img = states_dict["img"].to(self.device)
+        graph_flat = states_dict["graph"].to(self.device)
 
-        if self.train_graph:
+        # Value function не обучает graph
+        with torch.no_grad():
             graph_emb = self.shared_graph(graph_flat)
+
+        x = torch.cat([img, graph_emb], dim=-1)
+        features = self.feature_net(x)
+
+        # Handle hidden states
+        if hidden_states[0] is None or hidden_states[1] is None:
+            h = torch.zeros(LSTM_NUM_LAYERS, B, LSTM_HIDDEN_SIZE,
+                          device=self.device, dtype=features.dtype)
+            c = torch.zeros(LSTM_NUM_LAYERS, B, LSTM_HIDDEN_SIZE,
+                          device=self.device, dtype=features.dtype)
         else:
-            with torch.no_grad():
-                graph_emb = self.shared_graph(graph_flat)
+            h, c = hidden_states
+            if h.dim() == 2:
+                h = h.unsqueeze(0)
+            if c.dim() == 2:
+                c = c.unsqueeze(0)
 
-        x = torch.cat([img, graph_emb, actions], dim=-1)
-        q = self.net(x)
-        return q, {}
+        features = features.unsqueeze(1)
+        rnn_output, (h_new, c_new) = self.lstm(features, (h, c))
+        rnn_output = rnn_output.squeeze(1)
 
+        # Reset on terminated
+        if terminated is not None:
+            terminated = terminated.view(-1, 1)
+            h_new = h_new * (1 - terminated).transpose(0, 1).unsqueeze(0)
+            c_new = c_new * (1 - terminated).transpose(0, 1).unsqueeze(0)
 
-from skrl.resources.preprocessors.torch.running_standard_scaler import RunningStandardScaler
-from skrl.utils.spaces.torch import unflatten_tensorized_space, flatten_tensorized_space
+        v = self.output_net(rnn_output)
+
+        return v, {"rnn": [h_new, c_new]}
 
 
 class DictRunningStandardScaler(nn.Module):
@@ -443,7 +572,7 @@ class DictRunningStandardScaler(nn.Module):
         # 2) нормализовать только img
         s["img"] = self.img_scaler(s["img"], train=train, inverse=inverse, no_grad=no_grad)
 
-        # 3) свернуть обратно (в твоей версии skrl — только 1 аргумент)
+        # 3) свернуть обратно
         return flatten_tensorized_space(s)
 
 
@@ -478,9 +607,10 @@ env = wrap_env(env)
 device = env.device
 
 # ---------------------------------------------------------------------
-# Memory
+# Memory для PPO с LSTM
 # ---------------------------------------------------------------------
-memory = RandomMemory(memory_size=10000, num_envs=env.num_envs, device=device)
+# Важно: memory_size должен быть кратен sequence_length
+memory = RandomMemory(memory_size=LSTM_SEQUENCE_LENGTH * 3, num_envs=env.num_envs, device=device)
 
 # ---------------------------------------------------------------------
 # Shared graph module (one instance)
@@ -493,50 +623,53 @@ shared_graph = SharedGraphModule(
 ).to(device)
 
 # ---------------------------------------------------------------------
-# Models
+# Models для PPO с LSTM
 # ---------------------------------------------------------------------
 models = {
-    "policy": StochasticActor(env.observation_space, env.action_space, device, shared_graph=shared_graph),
-    # критик 1 обучает shared_graph
-    "critic_1": Critic(env.observation_space, env.action_space, device, shared_graph=shared_graph, train_graph=True),
-    # критик 2 НЕ обучает shared_graph (чтобы не делать двойной шаг оптимизатора)
-    "critic_2": Critic(env.observation_space, env.action_space, device, shared_graph=shared_graph, train_graph=False),
-    # таргеты никогда не обучают shared_graph
-    "target_critic_1": Critic(env.observation_space, env.action_space, device, shared_graph=shared_graph, train_graph=False),
-    "target_critic_2": Critic(env.observation_space, env.action_space, device, shared_graph=shared_graph, train_graph=False),
+    "policy": Policy(env.observation_space, env.action_space, device, shared_graph=shared_graph),
+    "value": Value(env.observation_space, env.action_space, device, shared_graph=shared_graph),
 }
 
 # ---------------------------------------------------------------------
-# SAC config
+# PPO config для LSTM
 # ---------------------------------------------------------------------
-cfg = SAC_DEFAULT_CONFIG.copy()
-cfg["gradient_steps"] = 4
-cfg["batch_size"] = 512
-cfg["discount_factor"] = 0.99
-cfg["polyak"] = 0.005
-cfg["actor_learning_rate"] = 3e-4
-cfg["critic_learning_rate"] = 3e-4
-cfg["random_timesteps"] = 0
-cfg["learning_starts"] = 100
-cfg["grad_norm_clip"] = 0
-cfg["learn_entropy"] = True
-cfg["entropy_learning_rate"] = 5e-3
-cfg["initial_entropy_value"] = 1.0
+cfg = PPO_DEFAULT_CONFIG.copy()
 
+# Memory - золотая середина для LSTM
+cfg["rollouts"] = 64  # было 48→128, теперь 64 (компромисс)
+cfg["learning_epochs"] = 8  # было 5 → увеличили, чтобы лучше использовать rollout
+cfg["mini_batches"] = 8  # было 4 → увеличили
+
+cfg["discount_factor"] = 0.99
+cfg["lambda"] = 0.95
+
+# Learning rates
+cfg["learning_rate"] = 3e-4  
+cfg["learning_rate_scheduler"] = None
+
+# PPO-specific
+cfg["ratio_clip"] = 0.2
+cfg["value_clip"] = 0.2
+cfg["clip_predicted_values"] = True
+
+# Regularization - ПОСТЕПЕННЫЙ EXPLORATION
+cfg["entropy_loss_scale"] = 0.02  # было 0.01→0.05, теперь 0.02 (средне)
+cfg["value_loss_scale"] = 1.0     # было 0.5 → увеличили, чтобы Value лучше училась
+cfg["grad_norm_clip"] = 1.0       # было 0.5 → ОК
+
+# State preprocessor
 cfg["state_preprocessor"] = DictRunningStandardScaler
 cfg["state_preprocessor_kwargs"] = {
-    "size": env.observation_space,              # ВАЖНО: полный dict-space
-    "img_space": env.observation_space["img"],  # Нормализуем только img
+    "size": env.observation_space,
+    "img_space": env.observation_space["img"],
     "device": device,
 }
-
-
 
 cfg["experiment"]["write_interval"] = 100
 cfg["experiment"]["checkpoint_interval"] = 1000
 cfg["experiment"]["directory"] = "logs/skrl/aloha_sac_graph"
 
-agent = SAC(
+agent = PPO(
     models=models,
     memory=memory,
     cfg=cfg,
@@ -549,16 +682,17 @@ agent = SAC(
 # Trainer
 # ---------------------------------------------------------------------
 if not EVAL:
-    cfg_trainer = {"timesteps": 330000}
+    cfg_trainer = {"timesteps": 330000, "headless": True}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
-    # checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac_graph/25-12-31_21-39-22-853326_SAC/checkpoints/agent_60000.pt"
+    # Если есть чекпоинт - раскомментируй:
+    # checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_lstm_graph/CHECKPOINT.pt"
     # agent.load(checkpoint_path)
     trainer.train()
 else:
-    cfg_trainer = {"timesteps": 1000}
+    cfg_trainer = {"timesteps": 1000, "headless": True}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
-    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac_graph/26-01-07_22-43-41-188516_SAC/checkpoints/agent_60000.pt"
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_lstm_graph/CHECKPOINT.pt"
     agent.load(checkpoint_path)
 
     trainer.eval()
