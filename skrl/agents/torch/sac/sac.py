@@ -424,7 +424,7 @@ class SAC(Agent):
                 ) / 2
 
             # ============ ORIENTATION LOSS INTEGRATION ============
-            localization_weight = 0.05  # НАЧНИ С МАЛОГО ВЕСА
+            localization_weight = 0.0  # НАЧНИ С МАЛОГО ВЕСА
             
             if 'orientation_loss' in critic_1_outputs:
                 orient_loss = critic_1_outputs['orientation_loss']

@@ -198,6 +198,8 @@ class Trainer:
                 # print("[infos keys]", infos["log"])
                 # for agent in self.agents:
                 self.agents.track_data("Metrics / success_rate_percent", infos["log"]["Episode/success_rate"])
+                self.agents.track_data("Metrics / angle", infos["log"]["Episode/angle"])
+                self.agents.track_data("Metrics / radius", infos["log"]["Episode/radius"])
                 # render scene
                 if not self.headless:
                     self.env.render()
