@@ -28,6 +28,11 @@ Train with graph:
 ```
 ./isaaclab.sh -p scripts/reinforcement_learning/skrl/train.py --task Isaac-Aloha-Direct-vG --num_envs 32 --enable_cameras --headless
 ```
+
+Train new nav:
+```
+./isaaclab.sh -p scripts/demos/sac_gmo.py
+```
 Play:
 ```
 ./isaaclab.sh -p scripts/reinforcement_learning/skrl/play.py --task Isaac-Aloha-Direct-v0 --algorithm SAC --num_envs 1 --checkpoint /home/xiso/IsaacLab/logs/skrl/aloha/2025-08-11_09-55-36_ppo_torch_SAC/checkpoints/agent_14000.pt --enable_cameras
