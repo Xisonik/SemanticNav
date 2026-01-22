@@ -11,9 +11,9 @@ The installation process fully complies with the official Isaac Lab documentatio
 The launch is carried out in accordance with the official documentation. The name of the environment - Isaac-Aloha-Direct-v0
 The SAC algorithm of the skrl library is used here.
 
-link for assets:
+link for all data and assets:
 ```
-https://drive.google.com/drive/folders/1JpMy9bIAhsimuZCMyoscgRr9rP1W7ewi?usp=drive_link
+[https://drive.google.com/drive/folders/1JpMy9bIAhsimuZCMyoscgRr9rP1W7ewi?usp=drive_link](https://drive.google.com/drive/folders/1kS6u0Z8zRGocMIzfZRqFv2DS_bSeUfiv?usp=sharing)
 ```
 
 Train:
