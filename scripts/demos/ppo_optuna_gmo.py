@@ -60,10 +60,10 @@ try:
     # Используем стандартный PPO из skrl (как в оригинальном файле)
     from skrl.agents.torch.ppo import PPO as PPO_WithAuxiliary, PPO_DEFAULT_CONFIG
     
-    print("✓ Все модули импортированы успешно!")
+    print(" Все модули импортированы успешно!")
     
 except ImportError as e:
-    print(f"❌ ОШИБКА ИМПОРТА: {e}")
+    print(f" ОШИБКА ИМПОРТА: {e}")
     print(f"\nПроверь:")
     print(f"  1. Путь sys.path.insert(0, '...') указывает на директорию с torch_ant_ppo_gmo.py")
     print(f"  2. Файл torch_ant_ppo_gmo.py существует и содержит нужные классы")

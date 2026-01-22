@@ -195,6 +195,9 @@ class Trainer:
                 # step the environments
                 # print("action before: ", actions)
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions)
+                # print("[infos keys]", infos["log"])
+                # for agent in self.agents:
+                self.agents.track_data("Metrics / success_rate_percent", infos["log"]["Episode/success_rate"])
                 # render scene
                 if not self.headless:
                     self.env.render()

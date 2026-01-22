@@ -136,8 +136,31 @@ class SAC(Agent):
             self.target_critic_2.freeze_parameters(True)
 
             # update target networks (hard update)
-            self.target_critic_1.update_parameters(self.critic_1, polyak=1)
-            self.target_critic_2.update_parameters(self.critic_2, polyak=1)
+            # NOTE: We manually copy only .net parameters because critic_1 may have additional
+            # registered modules (shared_graph, orientation_module) that target critics don't have
+            # in their .parameters() list. This prevents dimension mismatch errors.
+            with torch.no_grad():
+                # Copy critic_1.net → target_critic_1.net
+                if hasattr(self.critic_1, 'net') and hasattr(self.target_critic_1, 'net'):
+                    for target_p, source_p in zip(
+                        self.target_critic_1.net.parameters(),
+                        self.critic_1.net.parameters()
+                    ):
+                        target_p.data.copy_(source_p.data)
+                else:
+                    # Fallback to standard update if no .net attribute
+                    self.target_critic_1.update_parameters(self.critic_1, polyak=1)
+                
+                # Copy critic_2.net → target_critic_2.net
+                if hasattr(self.critic_2, 'net') and hasattr(self.target_critic_2, 'net'):
+                    for target_p, source_p in zip(
+                        self.target_critic_2.net.parameters(),
+                        self.critic_2.net.parameters()
+                    ):
+                        target_p.data.copy_(source_p.data)
+                else:
+                    # Fallback to standard update if no .net attribute
+                    self.target_critic_2.update_parameters(self.critic_2, polyak=1)
 
         # configuration
         self._gradient_steps = self.cfg["gradient_steps"]
@@ -350,6 +373,7 @@ class SAC(Agent):
         """
 
         # gradient steps
+        DEBUG = True
         for gradient_step in range(self._gradient_steps):
 
             # sample a batch from memory
@@ -388,7 +412,7 @@ class SAC(Agent):
                     )
 
                 # compute critic loss
-                critic_1_values, _, _ = self.critic_1.act(
+                critic_1_values, _, critic_1_outputs = self.critic_1.act(
                     {"states": sampled_states, "taken_actions": sampled_actions}, role="critic_1"
                 )
                 critic_2_values, _, _ = self.critic_2.act(
@@ -398,6 +422,50 @@ class SAC(Agent):
                 critic_loss = (
                     F.mse_loss(critic_1_values, target_values) + F.mse_loss(critic_2_values, target_values)
                 ) / 2
+
+            # ============ ORIENTATION LOSS INTEGRATION ============
+            localization_weight = 0.05  # НАЧНИ С МАЛОГО ВЕСА
+            
+            if 'orientation_loss' in critic_1_outputs:
+                orient_loss = critic_1_outputs['orientation_loss']
+                
+                # КРИТИЧНО: ДОБАВЛЯЕМ К CRITIC LOSS
+                critic_loss = critic_loss + localization_weight * orient_loss
+                
+                # Логирование (только первый gradient step каждого update)
+                if self.write_interval > 0 and gradient_step == 0:
+                    orient_accuracy = critic_1_outputs.get('orientation_accuracy', None)
+                    
+                    self.track_data("Localization / Orientation Loss", orient_loss.item())
+                    if orient_accuracy is not None:
+                        self.track_data("Localization / Orientation Accuracy", orient_accuracy.item())
+                    
+                    # DEBUG: детальная информация
+                    if DEBUG and timestep % 1000 == 0:
+                        print(f"\n[SAC._update] Timestep {timestep}:")
+                        print(f"  Critic loss (base): {((F.mse_loss(critic_1_values, target_values) + F.mse_loss(critic_2_values, target_values)) / 2).item():.4f}")
+                        print(f"  Orientation loss: {orient_loss.item():.4f}")
+                        print(f"  Weighted orient: {(localization_weight * orient_loss).item():.4f}")
+                        print(f"  Total critic loss: {critic_loss.item():.4f}")
+                        if orient_accuracy is not None:
+                            print(f"  Orientation accuracy: {orient_accuracy.item():.4f}")
+                        
+                        # Проверяем распределение labels
+                        if 'orientation_label' in critic_1_outputs:
+                            labels = critic_1_outputs['orientation_label']
+                            label_counts = torch.bincount(labels, minlength=36)
+                            label_std = label_counts.float().std().item()
+                            print(f"  Label distribution std: {label_std:.2f} (higher is better, ~10 is good)")
+                            
+                            # Топ-3 наиболее частых bins
+                            top3_bins = torch.topk(label_counts, k=3)
+                            print(f"  Top 3 bins: {top3_bins.indices.tolist()} with counts {top3_bins.values.tolist()}")
+            
+            elif DEBUG and timestep % 1000 == 0 and gradient_step == 0:
+                print(f"\n[SAC._update] ⚠️  WARNING: 'orientation_loss' not in critic_1_outputs!")
+                print(f"  Available keys: {list(critic_1_outputs.keys())}")
+            
+            # ============ END ORIENTATION LOSS ============
 
             # optimization step (critic)
             self.critic_optimizer.zero_grad()
@@ -418,7 +486,7 @@ class SAC(Agent):
             with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                 # compute policy (actor) loss
                 actions, log_prob, _ = self.policy.act({"states": sampled_states}, role="policy")
-                critic_1_values, _, _ = self.critic_1.act(
+                critic_1_values, _, outputs = self.critic_1.act(
                     {"states": sampled_states, "taken_actions": actions}, role="critic_1"
                 )
                 critic_2_values, _, _ = self.critic_2.act(
@@ -458,9 +526,30 @@ class SAC(Agent):
 
             self.scaler.update()  # called once, after optimizers have been stepped
 
-            # update target networks
-            self.target_critic_1.update_parameters(self.critic_1, polyak=self._polyak)
-            self.target_critic_2.update_parameters(self.critic_2, polyak=self._polyak)
+            # update target networks (polyak averaging)
+            # NOTE: We manually update only .net parameters for the same reason as in __init__
+            with torch.no_grad():
+                # Polyak averaging for critic_1 → target_critic_1
+                if hasattr(self.critic_1, 'net') and hasattr(self.target_critic_1, 'net'):
+                    for target_p, source_p in zip(
+                        self.target_critic_1.net.parameters(),
+                        self.critic_1.net.parameters()
+                    ):
+                        target_p.data.mul_(1.0 - self._polyak)
+                        target_p.data.add_(source_p.data, alpha=self._polyak)
+                else:
+                    self.target_critic_1.update_parameters(self.critic_1, polyak=self._polyak)
+                
+                # Polyak averaging for critic_2 → target_critic_2
+                if hasattr(self.critic_2, 'net') and hasattr(self.target_critic_2, 'net'):
+                    for target_p, source_p in zip(
+                        self.target_critic_2.net.parameters(),
+                        self.critic_2.net.parameters()
+                    ):
+                        target_p.data.mul_(1.0 - self._polyak)
+                        target_p.data.add_(source_p.data, alpha=self._polyak)
+                else:
+                    self.target_critic_2.update_parameters(self.critic_2, polyak=self._polyak)
 
             # update learning rate
             if self._learning_rate_scheduler:
@@ -491,3 +580,169 @@ class SAC(Agent):
                 if self._learning_rate_scheduler:
                     self.track_data("Learning / Policy learning rate", self.policy_scheduler.get_last_lr()[0])
                     self.track_data("Learning / Critic learning rate", self.critic_scheduler.get_last_lr()[0])
+
+    # def _update(self, timestep: int, timesteps: int) -> None:
+    #     """Algorithm's main update step
+
+    #     :param timestep: Current timestep
+    #     :type timestep: int
+    #     :param timesteps: Number of timesteps
+    #     :type timesteps: int
+    #     """
+
+    #     # gradient steps
+    #     for gradient_step in range(self._gradient_steps):
+
+    #         # sample a batch from memory
+    #         (
+    #             sampled_states,
+    #             sampled_actions,
+    #             sampled_rewards,
+    #             sampled_next_states,
+    #             sampled_terminated,
+    #             sampled_truncated,
+    #         ) = self.memory.sample(names=self._tensors_names, batch_size=self._batch_size)[0]
+
+    #         with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
+
+    #             sampled_states = self._state_preprocessor(sampled_states, train=True)
+    #             sampled_next_states = self._state_preprocessor(sampled_next_states, train=True)
+
+    #             # compute target values
+    #             with torch.no_grad():
+    #                 next_actions, next_log_prob, _ = self.policy.act({"states": sampled_next_states}, role="policy")
+
+    #                 target_q1_values, _, critic_1_outputs = self.target_critic_1.act(
+    #                     {"states": sampled_next_states, "taken_actions": next_actions}, role="target_critic_1"
+    #                 )
+    #                 target_q2_values, _, _ = self.target_critic_2.act(
+    #                     {"states": sampled_next_states, "taken_actions": next_actions}, role="target_critic_2"
+    #                 )
+    #                 target_q_values = (
+    #                     torch.min(target_q1_values, target_q2_values) - self._entropy_coefficient * next_log_prob
+    #                 )
+    #                 target_values = (
+    #                     sampled_rewards
+    #                     + self._discount_factor
+    #                     * (sampled_terminated | sampled_truncated).logical_not()
+    #                     * target_q_values
+    #                 )
+
+    #             # compute critic loss
+    #             critic_1_values, _, critic_1_outputs = self.critic_1.act(
+    #                 {"states": sampled_states, "taken_actions": sampled_actions}, role="critic_1"
+    #             )
+    #             critic_2_values, _, _ = self.critic_2.act(
+    #                 {"states": sampled_states, "taken_actions": sampled_actions}, role="critic_2"
+    #             )
+
+    #             critic_loss = (
+    #                 F.mse_loss(critic_1_values, target_values) + F.mse_loss(critic_2_values, target_values)
+    #             ) / 2
+
+    #         localization_weight = 0.3
+    #         if 'orientation_logits' in critic_1_outputs:
+    #             loc_loss = F.cross_entropy(
+    #                 critic_1_outputs['orientation_logits'],
+    #                 critic_1_outputs['orientation_label'].squeeze(-1)
+    #             )
+    #             # critic_loss = critic_loss + localization_weight * loc_loss
+                
+    #             # # Логирование
+    #             if self.write_interval > 0 and gradient_step == 0:
+    #                 pred_bins = torch.argmax(critic_1_outputs['orientation_logits'], dim=-1)
+    #                 accuracy = (pred_bins == critic_1_outputs['orientation_label']).float().mean()
+    #                 self.track_data("Localization / Orientation Accuracy", accuracy.item())
+    #                 self.track_data("Localization / Orientation Loss", loc_loss.item())
+    #         # optimization step (critic)
+    #         self.critic_optimizer.zero_grad()
+    #         self.scaler.scale(critic_loss).backward()
+
+    #         if config.torch.is_distributed:
+    #             self.critic_1.reduce_parameters()
+    #             self.critic_2.reduce_parameters()
+
+    #         if self._grad_norm_clip > 0:
+    #             self.scaler.unscale_(self.critic_optimizer)
+    #             nn.utils.clip_grad_norm_(
+    #                 itertools.chain(self.critic_1.parameters(), self.critic_2.parameters()), self._grad_norm_clip
+    #             )
+
+    #         self.scaler.step(self.critic_optimizer)
+
+    #         with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
+    #             # compute policy (actor) loss
+    #             actions, log_prob, _ = self.policy.act({"states": sampled_states}, role="policy")
+    #             critic_1_values, _, outputs = self.critic_1.act(
+    #                 {"states": sampled_states, "taken_actions": actions}, role="critic_1"
+    #             )
+    #             critic_2_values, _, _ = self.critic_2.act(
+    #                 {"states": sampled_states, "taken_actions": actions}, role="critic_2"
+    #             )
+
+    #             policy_loss = (
+    #                 self._entropy_coefficient * log_prob - torch.min(critic_1_values, critic_2_values)
+    #             ).mean()
+
+    #         # optimization step (policy)
+    #         self.policy_optimizer.zero_grad()
+    #         self.scaler.scale(policy_loss).backward()
+
+    #         if config.torch.is_distributed:
+    #             self.policy.reduce_parameters()
+
+    #         if self._grad_norm_clip > 0:
+    #             self.scaler.unscale_(self.policy_optimizer)
+    #             nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
+
+    #         self.scaler.step(self.policy_optimizer)
+
+    #         # entropy learning
+    #         if self._learn_entropy:
+    #             with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
+    #                 # compute entropy loss
+    #                 entropy_loss = -(self.log_entropy_coefficient * (log_prob + self._target_entropy).detach()).mean()
+
+    #             # optimization step (entropy)
+    #             self.entropy_optimizer.zero_grad()
+    #             self.scaler.scale(entropy_loss).backward()
+    #             self.scaler.step(self.entropy_optimizer)
+
+    #             # compute entropy coefficient
+    #             self._entropy_coefficient = torch.exp(self.log_entropy_coefficient.detach())
+
+    #         self.scaler.update()  # called once, after optimizers have been stepped
+
+    #         # update target networks
+    #         self.target_critic_1.update_parameters(self.critic_1, polyak=self._polyak)
+    #         self.target_critic_2.update_parameters(self.critic_2, polyak=self._polyak)
+
+    #         # update learning rate
+    #         if self._learning_rate_scheduler:
+    #             self.policy_scheduler.step()
+    #             self.critic_scheduler.step()
+
+    #         # record data
+    #         if self.write_interval > 0:
+    #             self.track_data("Loss / Policy loss", policy_loss.item())
+    #             self.track_data("Loss / Critic loss", critic_loss.item())
+
+    #             self.track_data("Q-network / Q1 (max)", torch.max(critic_1_values).item())
+    #             self.track_data("Q-network / Q1 (min)", torch.min(critic_1_values).item())
+    #             self.track_data("Q-network / Q1 (mean)", torch.mean(critic_1_values).item())
+
+    #             self.track_data("Q-network / Q2 (max)", torch.max(critic_2_values).item())
+    #             self.track_data("Q-network / Q2 (min)", torch.min(critic_2_values).item())
+    #             self.track_data("Q-network / Q2 (mean)", torch.mean(critic_2_values).item())
+
+    #             self.track_data("Target / Target (max)", torch.max(target_values).item())
+    #             self.track_data("Target / Target (min)", torch.min(target_values).item())
+    #             self.track_data("Target / Target (mean)", torch.mean(target_values).item())
+
+    #             if self._learn_entropy:
+    #                 self.track_data("Loss / Entropy loss", entropy_loss.item())
+    #                 self.track_data("Coefficient / Entropy coefficient", self._entropy_coefficient.item())
+
+    #             if self._learning_rate_scheduler:
+    #                 self.track_data("Learning / Policy learning rate", self.policy_scheduler.get_last_lr()[0])
+    #                 self.track_data("Learning / Critic learning rate", self.critic_scheduler.get_last_lr()[0])

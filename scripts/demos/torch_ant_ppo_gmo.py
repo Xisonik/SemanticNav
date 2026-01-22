@@ -293,6 +293,7 @@ class OrientationModule(nn.Module):
         outputs = {'orientation_logits': logits}
         
         # Если есть ground truth - вычисляем loss и accuracy
+        # print("ground_truth_yaw ORM", ground_truth_yaw)
         if ground_truth_yaw is not None:
             if ground_truth_yaw.dim() == 2:
                 ground_truth_yaw = ground_truth_yaw.squeeze(-1)
@@ -327,6 +328,35 @@ class OrientationModule(nn.Module):
 # ---------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------
+def print_orientation_info(orient_outputs, batch_idx=0):
+    """Быстрый вывод информации об ориентации"""
+    logits = orient_outputs['orientation_logits']
+    probs = F.softmax(logits, dim=-1)
+    
+    num_bins = logits.shape[-1]
+    bin_size = 2 * torch.pi / num_bins
+    
+    # Топ-3 вероятности и их бины
+    top_probs, top_bins = torch.topk(probs[batch_idx], 3)
+    
+    # Конвертируем бины в углы
+    top_angles = -torch.pi + (top_bins + 0.5) * bin_size
+    
+    # Неопределённость
+    entropy = -(probs[batch_idx] * torch.log(probs[batch_idx] + 1e-10)).sum()
+    max_entropy = torch.log(torch.tensor(num_bins))
+    
+    print(f"Top-3 predicted angles:")
+    for i in range(3):
+        angle_deg = torch.rad2deg(top_angles[i]).item()
+        prob = top_probs[i].item()
+        bin_idx = top_bins[i].item()
+        print(f"  {i+1}. {angle_deg:6.1f}° (bin {bin_idx:2d}): prob={prob:.3f}")
+    
+    print(f"\nEntropy: {entropy:.3f}/{max_entropy:.3f}")
+    
+    return top_angles, top_probs
+    
 
 class Policy(GaussianMixin, Model):
     """Policy (Actor) для PPO"""
@@ -371,9 +401,11 @@ class Policy(GaussianMixin, Model):
         graph_emb = self.shared_graph(graph_flat)
         
         # Orientation НЕ обучается через policy
+        # print("policy")
         with torch.no_grad():
-            orientation_emb, _ = self.orientation_module(img, graph_emb, ground_truth_yaw=None)
-
+            orientation_emb, orient_outputs = self.orientation_module(img, graph_emb, ground_truth_yaw=None)
+        # print("or outputs: ", orient_outputs)
+        # angle, prob = print_orientation_info(orient_outputs)
         x = torch.cat([img, graph_emb, orientation_emb], dim=-1)
         mu = self.net(x)
         
@@ -429,6 +461,7 @@ class Value(DeterministicMixin, Model):
         
         # Ground truth orientation
         ground_truth_yaw = states.get("orientation", None)
+        # print("ground_truth_yaw VALUE", ground_truth_yaw)
         if ground_truth_yaw is not None:
             ground_truth_yaw = ground_truth_yaw.to(self.device)
         
@@ -481,7 +514,8 @@ class DictRunningStandardScaler(nn.Module):
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
     EVAL = False
-
+    # EVAL = True
+    
     set_seed(42)
 
     # Environment
@@ -491,12 +525,12 @@ if __name__ == "__main__":
         env = load_isaaclab_env(
             task_name="Isaac-Aloha-Direct-v0",
             num_envs=1,
-            headless=True,
+            # headless=True,
             cli_args=["--enable_cameras", "--video"],
         )
         env = RecordVideo(
             env,
-            video_folder="logs/skrl/aloha/videos",
+            video_folder="logs/skrl/videos",
             name_prefix="aloha_eval",
             episode_trigger=lambda ep: True,
         )
@@ -593,26 +627,28 @@ if __name__ == "__main__":
 
     # PPO Config
     cfg = PPO_DEFAULT_CONFIG.copy()
-    cfg["rollouts"] = 48
+    cfg["rollouts"] = 64 #48 1536
     cfg["learning_epochs"] = 5
-    cfg["mini_batches"] = 8
+    cfg["mini_batches"] = 4
 
     cfg["discount_factor"] = 0.99
     cfg["lambda"] = 0.95
 
-    cfg["learning_rate"] = 3e-4
-    cfg["learning_rate_scheduler"] = None
+    cfg["learning_rate"] = 5.0e-04
+    from skrl.resources.schedulers.torch import KLAdaptiveLR
+    cfg["learning_rate_scheduler"] = KLAdaptiveLR 
+    cfg["learning_rate_scheduler_kwargs"] = {"kl_threshold": 0.016}
 
     cfg["ratio_clip"] = 0.2
     cfg["value_clip"] = 0.2
     cfg["clip_predicted_values"] = True
 
-    cfg["entropy_loss_scale"] = 0.05
-    cfg["value_loss_scale"] = 0.5
-    cfg["grad_norm_clip"] = 0.5
+    cfg["entropy_loss_scale"] = 0.0
+    cfg["value_loss_scale"] = 2.0
+    cfg["grad_norm_clip"] = 1.0
 
     # ВАЖНО: Вес для orientation loss
-    cfg["orientation_loss_weight"] = 0.2
+    cfg["orientation_loss_weight"] = 0.05
 
     cfg["state_preprocessor"] = DictRunningStandardScaler
     cfg["state_preprocessor_kwargs"] = {
@@ -650,7 +686,7 @@ if __name__ == "__main__":
         cfg_trainer = {"timesteps": 1000, "headless": True}
         trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
         
-        checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/CHECKPOINT.pt"
+        checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-19_17-33-54-140845_PPO/checkpoints/agent_7000.pt"
         agent.load(checkpoint_path)
         
         trainer.eval()

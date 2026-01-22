@@ -88,7 +88,6 @@ class SequentialTrainer(Trainer):
             else:
                 self.multi_agent_train()
             return
-
         # reset env
         states, infos = self.env.reset()
 
@@ -113,7 +112,6 @@ class SequentialTrainer(Trainer):
 
                 # print("action before: ", actions)
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions)
-                
                 # print("action after: ", actions)
                 # render scene
                 if not self.headless:

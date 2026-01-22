@@ -151,3 +151,33 @@ class RunningStandardScaler(nn.Module):
             with torch.no_grad():
                 return self._compute(x, train, inverse)
         return self._compute(x, train, inverse)
+
+class PartialRunningStandardScaler(RunningStandardScaler):
+    """
+    Нормализует только первые img_dim компонент вектора states,
+    остальное (например graph) оставляет без изменений.
+
+    Важно: size должен быть FULL env.observation_space (полный flatten),
+    иначе skrl подаст другой размер и всё упадёт.
+    """
+    def __init__(self, size, img_space, epsilon=1e-8, clip_threshold=5.0, device=None):
+        # size = полный space (img+graph)
+        super().__init__(size=size, epsilon=epsilon, clip_threshold=clip_threshold, device=device)
+
+        # сколько занимает img в flatten-векторе
+        self.img_dim = compute_space_size(img_space, occupied_size=True)
+
+    def _compute(self, x: torch.Tensor, train: bool = False, inverse: bool = False) -> torch.Tensor:
+        # x: [B, full_dim]
+        x = x.clone()
+
+        img = x[:, :self.img_dim]          # [B, img_dim]
+        rest = x[:, self.img_dim:]         # [B, rest_dim] — граф не трогаем
+
+        # тренируем статистику и нормализуем ТОЛЬКО img
+        img = super()._compute(img, train=train, inverse=inverse)
+
+        # склеиваем обратно
+        x[:, :self.img_dim] = img
+        x[:, self.img_dim:] = rest
+        return x

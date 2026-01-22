@@ -490,8 +490,8 @@ models = {
 # PPO config
 # ---------------------------------------------------------------------
 cfg = PPO_DEFAULT_CONFIG.copy()
-cfg["rollouts"] = 48  # должно совпадать с memory_size
-cfg["learning_epochs"] = 5
+cfg["rollouts"] = 16  # должно совпадать с memory_size
+cfg["learning_epochs"] = 8
 cfg["mini_batches"] = 8
 
 cfg["discount_factor"] = 0.99           # gamma

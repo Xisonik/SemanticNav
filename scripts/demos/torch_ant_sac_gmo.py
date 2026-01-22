@@ -417,8 +417,8 @@ class OrientationModule(nn.Module):
 # ---------------------------------------------------------------------
 # CLI аргументы / seed
 # ---------------------------------------------------------------------
-EVAL = False
-# EVAL = True
+# EVAL = False
+EVAL = True
 
 set_seed(42)
 
@@ -813,7 +813,7 @@ cfg["state_preprocessor_kwargs"] = {
 
 cfg["experiment"]["write_interval"] = 100
 cfg["experiment"]["checkpoint_interval"] = 1000
-cfg["experiment"]["directory"] = "logs/skrl/aloha_sac_modular"
+cfg["experiment"]["directory"] = "logs/skrl/aloha_ppo_orientation"
 
 agent = SAC(
     models=models,
@@ -843,7 +843,7 @@ else:
     cfg_trainer = {"timesteps": 1000}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
-    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac_modular/CHECKPOINT.pt"
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-20_23-55-14-244298_SAC/checkpoints/agent_80000.pt"
     agent.load(checkpoint_path)
 
     trainer.eval()

@@ -17,59 +17,60 @@ from skrl.resources.schedulers.torch import KLAdaptiveLR
 
 
 # fmt: off
-# [start-config-dict-torch]
 PPO_DEFAULT_CONFIG = {
-    "rollouts": 16,                 # number of rollouts before updating
-    "learning_epochs": 8,           # number of learning epochs during each update
-    "mini_batches": 2,              # number of mini batches during each learning epoch
+    "rollouts": 16,
+    "learning_epochs": 8,
+    "mini_batches": 2,
 
-    "discount_factor": 0.99,        # discount factor (gamma)
-    "lambda": 0.95,                 # TD(lambda) coefficient (lam) for computing returns and advantages
+    "discount_factor": 0.99,
+    "lambda": 0.95,
 
-    "learning_rate": 1e-3,                  # learning rate
-    "learning_rate_scheduler": None,        # learning rate scheduler class (see torch.optim.lr_scheduler)
-    "learning_rate_scheduler_kwargs": {},   # learning rate scheduler's kwargs (e.g. {"step_size": 1e-3})
+    "learning_rate": 1e-3,
+    "learning_rate_scheduler": None,
+    "learning_rate_scheduler_kwargs": {},
 
-    "state_preprocessor": None,             # state preprocessor class (see skrl.resources.preprocessors)
-    "state_preprocessor_kwargs": {},        # state preprocessor's kwargs (e.g. {"size": env.observation_space})
-    "value_preprocessor": None,             # value preprocessor class (see skrl.resources.preprocessors)
-    "value_preprocessor_kwargs": {},        # value preprocessor's kwargs (e.g. {"size": 1})
+    "state_preprocessor": None,
+    "state_preprocessor_kwargs": {},
+    "value_preprocessor": None,
+    "value_preprocessor_kwargs": {},
 
-    "random_timesteps": 0,          # random exploration steps
-    "learning_starts": 0,           # learning starts after this many steps
+    "random_timesteps": 0,
+    "learning_starts": 0,
 
-    "grad_norm_clip": 0.5,              # clipping coefficient for the norm of the gradients
-    "ratio_clip": 0.2,                  # clipping coefficient for computing the clipped surrogate objective
-    "value_clip": 0.2,                  # clipping coefficient for computing the value loss (if clip_predicted_values is True)
-    "clip_predicted_values": False,     # clip predicted values during value loss computation
+    "grad_norm_clip": 0.5,
+    "ratio_clip": 0.2,
+    "value_clip": 0.2,
+    "clip_predicted_values": False,
 
-    "entropy_loss_scale": 0.0,      # entropy loss scaling factor
-    "value_loss_scale": 1.0,        # value loss scaling factor
+    "entropy_loss_scale": 0.0,
+    "value_loss_scale": 1.0,
+    
+    # НОВОЕ: Вес для auxiliary orientation loss
+    "orientation_loss_weight": 0.05,
 
-    "kl_threshold": 0,              # KL divergence threshold for early stopping
+    "kl_threshold": 0,
 
-    "rewards_shaper": None,         # rewards shaping function: Callable(reward, timestep, timesteps) -> reward
-    "time_limit_bootstrap": False,  # bootstrap at timeout termination (episode truncation)
+    "rewards_shaper": None,
+    "time_limit_bootstrap": False,
 
-    "mixed_precision": False,       # enable automatic mixed precision for higher performance
+    "mixed_precision": False,
 
     "experiment": {
-        "directory": "",            # experiment's parent directory
-        "experiment_name": "",      # experiment name
-        "write_interval": "auto",   # TensorBoard writing interval (timesteps)
-
-        "checkpoint_interval": "auto",      # interval for checkpoints (timesteps)
-        "store_separately": False,          # whether to store checkpoints separately
-
-        "wandb": False,             # whether to use Weights & Biases
-        "wandb_kwargs": {}          # wandb kwargs (see https://docs.wandb.ai/ref/python/init)
+        "directory": "",
+        "experiment_name": "",
+        "write_interval": "auto",
+        "checkpoint_interval": "auto",
+        "store_separately": False,
+        "wandb": False,
+        "wandb_kwargs": {}
     }
 }
-# [end-config-dict-torch]
 # fmt: on
 
 
 class PPO(Agent):
+    """PPO с поддержкой auxiliary loss (orientation learning)"""
+    
     def __init__(
         self,
         models: Mapping[str, Model],
@@ -79,28 +80,6 @@ class PPO(Agent):
         device: Optional[Union[str, torch.device]] = None,
         cfg: Optional[dict] = None,
     ) -> None:
-        """Proximal Policy Optimization (PPO)
-
-        https://arxiv.org/abs/1707.06347
-
-        :param models: Models used by the agent
-        :type models: dictionary of skrl.models.torch.Model
-        :param memory: Memory to storage the transitions.
-                       If it is a tuple, the first element will be used for training and
-                       for the rest only the environment transitions will be added
-        :type memory: skrl.memory.torch.Memory, list of skrl.memory.torch.Memory or None
-        :param observation_space: Observation/state space or shape (default: ``None``)
-        :type observation_space: int, tuple or list of int, gymnasium.Space or None, optional
-        :param action_space: Action space or shape (default: ``None``)
-        :type action_space: int, tuple or list of int, gymnasium.Space or None, optional
-        :param device: Device on which a tensor/array is or will be allocated (default: ``None``).
-                       If None, the device will be either ``"cuda"`` if available or ``"cpu"``
-        :type device: str or torch.device, optional
-        :param cfg: Configuration dictionary
-        :type cfg: dict
-
-        :raises KeyError: If the models dictionary is missing a required key
-        """
         _cfg = copy.deepcopy(PPO_DEFAULT_CONFIG)
         _cfg.update(cfg if cfg is not None else {})
         super().__init__(
@@ -141,6 +120,9 @@ class PPO(Agent):
 
         self._value_loss_scale = self.cfg["value_loss_scale"]
         self._entropy_loss_scale = self.cfg["entropy_loss_scale"]
+        
+        # НОВОЕ: Вес для orientation loss
+        self._orientation_loss_weight = self.cfg["orientation_loss_weight"]
 
         self._kl_threshold = self.cfg["kl_threshold"]
 
@@ -213,32 +195,17 @@ class PPO(Agent):
             self.memory.create_tensor(name="returns", size=1, dtype=torch.float32)
             self.memory.create_tensor(name="advantages", size=1, dtype=torch.float32)
 
-            # tensors sampled during training
             self._tensors_names = ["states", "actions", "log_prob", "values", "returns", "advantages"]
 
-        # create temporary variables needed for storage and computation
+        # create temporary variables
         self._current_log_prob = None
         self._current_next_states = None
 
     def act(self, states: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
-        """Process the environment's states to make a decision (actions) using the main policy
-
-        :param states: Environment's states
-        :type states: torch.Tensor
-        :param timestep: Current timestep
-        :type timestep: int
-        :param timesteps: Number of timesteps
-        :type timesteps: int
-
-        :return: Actions
-        :rtype: torch.Tensor
-        """
-        # sample random actions
-        # TODO, check for stochasticity
+        """Process the environment's states to make a decision (actions)"""
         if timestep < self._random_timesteps:
             return self.policy.random_act({"states": self._state_preprocessor(states)}, role="policy")
 
-        # sample stochastic actions
         with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
             actions, log_prob, outputs = self.policy.act({"states": self._state_preprocessor(states)}, role="policy")
             self._current_log_prob = log_prob
@@ -257,27 +224,7 @@ class PPO(Agent):
         timestep: int,
         timesteps: int,
     ) -> None:
-        """Record an environment transition in memory
-
-        :param states: Observations/states of the environment used to make the decision
-        :type states: torch.Tensor
-        :param actions: Actions taken by the agent
-        :type actions: torch.Tensor
-        :param rewards: Instant rewards achieved by the current actions
-        :type rewards: torch.Tensor
-        :param next_states: Next observations/states of the environment
-        :type next_states: torch.Tensor
-        :param terminated: Signals to indicate that episodes have terminated
-        :type terminated: torch.Tensor
-        :param truncated: Signals to indicate that episodes have been truncated
-        :type truncated: torch.Tensor
-        :param infos: Additional information about the environment
-        :type infos: Any type supported by the environment
-        :param timestep: Current timestep
-        :type timestep: int
-        :param timesteps: Number of timesteps
-        :type timesteps: int
-        """
+        """Record an environment transition in memory"""
         super().record_transition(
             states, actions, rewards, next_states, terminated, truncated, infos, timestep, timesteps
         )
@@ -294,7 +241,7 @@ class PPO(Agent):
                 values, _, _ = self.value.act({"states": self._state_preprocessor(states)}, role="value")
                 values = self._value_preprocessor(values, inverse=True)
 
-            # time-limit (truncation) bootstrapping
+            # time-limit bootstrapping
             if self._time_limit_bootstrap:
                 rewards += self._discount_factor * values * truncated
 
@@ -322,23 +269,11 @@ class PPO(Agent):
                 )
 
     def pre_interaction(self, timestep: int, timesteps: int) -> None:
-        """Callback called before the interaction with the environment
-
-        :param timestep: Current timestep
-        :type timestep: int
-        :param timesteps: Number of timesteps
-        :type timesteps: int
-        """
+        """Callback called before the interaction with the environment"""
         pass
 
     def post_interaction(self, timestep: int, timesteps: int) -> None:
-        """Callback called after the interaction with the environment
-
-        :param timestep: Current timestep
-        :type timestep: int
-        :param timesteps: Number of timesteps
-        :type timesteps: int
-        """
+        """Callback called after the interaction with the environment"""
         self._rollout += 1
         if not self._rollout % self._rollouts and timestep >= self._learning_starts:
             self.set_mode("train")
@@ -349,13 +284,7 @@ class PPO(Agent):
         super().post_interaction(timestep, timesteps)
 
     def _update(self, timestep: int, timesteps: int) -> None:
-        """Algorithm's main update step
-
-        :param timestep: Current timestep
-        :type timestep: int
-        :param timesteps: Number of timesteps
-        :type timesteps: int
-        """
+        """Algorithm's main update step with auxiliary loss support"""
 
         def compute_gae(
             rewards: torch.Tensor,
@@ -365,30 +294,12 @@ class PPO(Agent):
             discount_factor: float = 0.99,
             lambda_coefficient: float = 0.95,
         ) -> torch.Tensor:
-            """Compute the Generalized Advantage Estimator (GAE)
-
-            :param rewards: Rewards obtained by the agent
-            :type rewards: torch.Tensor
-            :param dones: Signals to indicate that episodes have ended
-            :type dones: torch.Tensor
-            :param values: Values obtained by the agent
-            :type values: torch.Tensor
-            :param next_values: Next values obtained by the agent
-            :type next_values: torch.Tensor
-            :param discount_factor: Discount factor
-            :type discount_factor: float
-            :param lambda_coefficient: Lambda coefficient
-            :type lambda_coefficient: float
-
-            :return: Generalized Advantage Estimator
-            :rtype: torch.Tensor
-            """
+            """Compute GAE"""
             advantage = 0
             advantages = torch.zeros_like(rewards)
             not_dones = dones.logical_not()
             memory_size = rewards.shape[0]
 
-            # advantages computation
             for i in reversed(range(memory_size)):
                 next_values = values[i + 1] if i < memory_size - 1 else last_values
                 advantage = (
@@ -397,9 +308,8 @@ class PPO(Agent):
                     + discount_factor * not_dones[i] * (next_values + lambda_coefficient * advantage)
                 )
                 advantages[i] = advantage
-            # returns computation
+            
             returns = advantages + values
-            # normalize advantages
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
             return returns, advantages
@@ -433,6 +343,8 @@ class PPO(Agent):
         cumulative_policy_loss = 0
         cumulative_entropy_loss = 0
         cumulative_value_loss = 0
+        cumulative_orientation_loss = 0  # НОВОЕ
+        cumulative_orientation_accuracy = 0  # НОВОЕ
 
         # learning epochs
         for epoch in range(self._learning_epochs):
@@ -452,6 +364,7 @@ class PPO(Agent):
 
                     sampled_states = self._state_preprocessor(sampled_states, train=not epoch)
 
+                    # Policy forward
                     _, next_log_prob, _ = self.policy.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="policy"
                     )
@@ -481,18 +394,45 @@ class PPO(Agent):
 
                     policy_loss = -torch.min(surrogate, surrogate_clipped).mean()
 
-                    # compute value loss
-                    predicted_values, _, _ = self.value.act({"states": sampled_states}, role="value")
-
+                    # compute value loss + ORIENTATION LOSS
+                    predicted_values, _, orient_outputs = self.value.act({"states": sampled_states}, role="value")
+#                   Правильно распаковывает 3 значения (values, log_prob, outputs)
                     if self._clip_predicted_values:
                         predicted_values = sampled_values + torch.clip(
                             predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
                         )
                     value_loss = self._value_loss_scale * F.mse_loss(sampled_returns, predicted_values)
+                    
+                    # ДОБАВЛЯЕМ ORIENTATION LOSS!
+                    orientation_loss = 0
+                    if 'orientation_loss' in orient_outputs:
+                        orientation_loss = self._orientation_loss_weight * orient_outputs['orientation_loss']
+                        
+                        # Track accuracy
+                        if 'orientation_accuracy' in orient_outputs:
+                            cumulative_orientation_accuracy += orient_outputs['orientation_accuracy'].item()
+
+                # Total loss
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
+                # print("value and or: ", policy_loss, value_loss, orientation_loss)
+                total_loss = policy_loss + entropy_loss + value_loss + orientation_loss
 
                 # optimization step
                 self.optimizer.zero_grad()
-                self.scaler.scale(policy_loss + entropy_loss + value_loss).backward()
+                self.scaler.scale(total_loss).backward()
 
                 if config.torch.is_distributed:
                     self.policy.reduce_parameters()
@@ -516,12 +456,13 @@ class PPO(Agent):
                 cumulative_value_loss += value_loss.item()
                 if self._entropy_loss_scale:
                     cumulative_entropy_loss += entropy_loss.item()
+                if isinstance(orientation_loss, torch.Tensor):
+                    cumulative_orientation_loss += orientation_loss.item()
 
             # update learning rate
             if self._learning_rate_scheduler:
                 if isinstance(self.scheduler, KLAdaptiveLR):
                     kl = torch.tensor(kl_divergences, device=self.device).mean()
-                    # reduce (collect from all workers/processes) KL in distributed runs
                     if config.torch.is_distributed:
                         torch.distributed.all_reduce(kl, op=torch.distributed.ReduceOp.SUM)
                         kl /= config.torch.world_size
@@ -530,12 +471,17 @@ class PPO(Agent):
                     self.scheduler.step()
 
         # record data
-        self.track_data("Loss / Policy loss", cumulative_policy_loss / (self._learning_epochs * self._mini_batches))
-        self.track_data("Loss / Value loss", cumulative_value_loss / (self._learning_epochs * self._mini_batches))
+        total_updates = self._learning_epochs * self._mini_batches
+        self.track_data("Loss / Policy loss", cumulative_policy_loss / total_updates)
+        self.track_data("Loss / Value loss", cumulative_value_loss / total_updates)
         if self._entropy_loss_scale:
-            self.track_data(
-                "Loss / Entropy loss", cumulative_entropy_loss / (self._learning_epochs * self._mini_batches)
-            )
+            self.track_data("Loss / Entropy loss", cumulative_entropy_loss / total_updates)
+        
+        # НОВОЕ: Track orientation metrics
+        if cumulative_orientation_loss > 0:
+            self.track_data("Localization / Orientation Loss", cumulative_orientation_loss / total_updates)
+        if cumulative_orientation_accuracy > 0:
+            self.track_data("Localization / Orientation Accuracy", cumulative_orientation_accuracy / total_updates)
 
         self.track_data("Policy / Standard deviation", self.policy.distribution(role="policy").stddev.mean().item())
 

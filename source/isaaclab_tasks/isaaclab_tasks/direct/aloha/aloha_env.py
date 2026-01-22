@@ -59,6 +59,18 @@ class WheeledRobotEnvWindow(BaseEnvWindow):
                 with self.ui_window_elements["debug_vstack"]:
                     self._create_debug_vis_ui_element("targets", self.env)
 
+def quat_conjugate(quat):
+    """
+    Сопряжённый кватернион.
+    Предполагаем формат (w, x, y, z)
+    """
+    # Проверь формат!
+    # print(f"quat example: {quat[0]}")  # Посмотри первые 4 значения
+    
+    # Если (w, x, y, z):
+    w, x, y, z = quat[:, 0], quat[:, 1], quat[:, 2], quat[:, 3]
+    return torch.stack([w, -x, -y, -z], dim=-1)
+
 @configclass
 class WheeledRobotEnvCfg(DirectRLEnvCfg):
     episode_length_s = 512.0
@@ -91,7 +103,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     num_total_objects = 14 #36 12 num_total_objects * 5
 
     observation_space = gym.spaces.Dict({
-        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(512*1+4+2,), dtype=np.float32),  #518
+        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2061,), dtype=np.float32),  #518 512*4+4+2
         "orientation": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(1,), dtype=np.float32),
         "graph": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(24*17,), dtype=np.float32)
     })
@@ -177,7 +189,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.CAMERA = True
         self.memory_on = True
         # self.tracker = PathTracker(num_envs=self.num_envs, device=self.device)
-        self.history_length_for_memory = 1
+        self.history_length_for_memory = 4
         super().__init__(cfg, render_mode, **kwargs)
         if self.memory_on:
             self.memory_manager = MemoryManager(
@@ -550,7 +562,6 @@ class WheeledRobotEnv(DirectRLEnv):
         embedding = self.memory_manager.get_observations(m=self.history_length_for_memory)
         # print("scene_embeddings", self.scene_embeddings)
         # print(len(self.scene_embeddings), len(self.scene_embeddings[0]))
-        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
         # print(len(obs_img), len(obs_img[0])), self.to_local(self._desired_pos_w)
 
         robot_quat = self._robot.data.root_quat_w # [num_envs, 4]
@@ -559,7 +570,11 @@ class WheeledRobotEnv(DirectRLEnv):
         # ВНИМАНИЕ: Isaac Lab использует (w,x,y,z) или (x,y,z,w) - ПРОВЕРЬТЕ!
         w, x, y, z = robot_quat[:, 0], robot_quat[:, 1], robot_quat[:, 2], robot_quat[:, 3]
         robot_yaw = torch.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y**2 + z**2))
-        robot_yaw = angle
+        # print("robot angle:", robot_yaw)
+        # print(f"robot angle: {torch.rad2deg(robot_yaw).item():.1f}°")
+        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
+
+        # robot_yaw = angle
         # print("yaw ", robot_yaw.unsqueeze(1))
         # print("yaw ", robot_yaw.unsqueeze(1))
         # print("ahspe ", obs_img.shape, robot_yaw.shape)
@@ -590,11 +605,35 @@ class WheeledRobotEnv(DirectRLEnv):
 
         # Знаковый угол [-π, π]
         relative_angle = torch.atan2(cross, dot)  # [N]
+        root_quat_w = self._robot.data.root_quat_w  # [N, 4]
+        root_pos_w = self._robot.data.root_pos_w    # [N, 3]
+
+        # 1. Вектор от робота к цели в мировых координатах
+        to_goal_world = self._desired_pos_w - root_pos_w  # [N, 3]
+
+        # 2. Конвертируем в ЛОКАЛЬНЫЕ координаты робота
+        # Нужна обратная ротация (ротация мира в систему координат робота)
+        quat_inv = quat_conjugate(root_quat_w)  # Инвертируем кватернион
+        to_goal_local = self.quat_rotate(quat_inv, to_goal_world)  # [N, 3]
+
+        # 3. Берём только XY компоненты (игнорируем высоту Z)
+        to_goal_local_xy = to_goal_local[:, :2]  # [N, 2]
+
+        # 4. Вычисляем угол через atan2 (в плоскости XY)
+        # В системе координат робота:
+        #   X - вперёд (куда смотрит робот)
+        #   Y - влево
+        # Тогда:
+        #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
+        relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
+        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w), relative_yaw.unsqueeze(1)], dim=-1)
+        # print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
         obs = {
             "img": obs_img,          # нормализуем
-            "orientation": robot_yaw.unsqueeze(1),
+            "orientation": relative_yaw.unsqueeze(1),
             "graph": self.scene_embeddings # НЕ нормализуем
         }
+        # print("len ", len(obs_img[0]))
         self.previous_ang_vel = self.angular_speed
         # log_embedding_stats(image_embeddings) self._desired_pos_w[:, :2],
 
@@ -607,8 +646,6 @@ class WheeledRobotEnv(DirectRLEnv):
             self.operations_times["make_observ"] = end_time - start_time
 
         return observations
-
-    # as they are not affected by the observation space change.
 
     def _pre_physics_step(self, actions: torch.Tensor):
         env_ids = self._robot._ALL_INDICES.clone()

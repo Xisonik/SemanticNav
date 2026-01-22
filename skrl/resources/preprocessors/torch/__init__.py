@@ -1,1 +1,1 @@
-from skrl.resources.preprocessors.torch.running_standard_scaler import RunningStandardScaler
+from skrl.resources.preprocessors.torch.running_standard_scaler import RunningStandardScaler, PartialRunningStandardScaler
