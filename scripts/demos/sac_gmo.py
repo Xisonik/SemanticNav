@@ -843,7 +843,7 @@ else:
     cfg_trainer = {"timesteps": 1000}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
-    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-20_23-55-14-244298_SAC/checkpoints/agent_80000.pt"
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-23_10-47-31-079515_SAC/checkpoints/agent_8000.pt"
     agent.load(checkpoint_path)
 
     trainer.eval()

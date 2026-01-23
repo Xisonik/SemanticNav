@@ -282,7 +282,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.mean_radius = 3.5
         self.max_angle_error = 0.3 * torch.pi
         self.cur_angle_error = torch.pi * 0.3
-        self.warm = False
+        self.warm = True
         self.warm_len = 1000
         self.without_imitation = self.warm_len / 2
         self.without_imitation_log = False

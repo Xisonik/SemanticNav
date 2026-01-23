@@ -1320,7 +1320,8 @@ class SceneManager:
         final_yaw = base_yaw + error #+ torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
         # print(final_yaw)
         # final_yaw = torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
-        # final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
+        if mean_dist >= 5:
+            final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
         robot_quats = torch.zeros(num_envs, 4, device=self.device)
         robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
         robot_quats[:, 3] = torch.sin(final_yaw / 2.0)
