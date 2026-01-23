@@ -373,7 +373,7 @@ class SAC(Agent):
         """
 
         # gradient steps
-        DEBUG = True
+        DEBUG = False
         for gradient_step in range(self._gradient_steps):
 
             # sample a batch from memory
