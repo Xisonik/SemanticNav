@@ -15,20 +15,6 @@ link for all data and assets:
 ```
 [https://drive.google.com/drive/folders/1JpMy9bIAhsimuZCMyoscgRr9rP1W7ewi?usp=drive_link](https://drive.google.com/drive/folders/1kS6u0Z8zRGocMIzfZRqFv2DS_bSeUfiv?usp=sharing)
 ```
-
-Train:
-```
-./isaaclab.sh -p scripts/reinforcement_learning/skrl/train.py --task Isaac-Aloha-Direct-v0 --num_envs 32 --enable_cameras --headless
-```
-Train without graph:
-```
-./isaaclab.sh -p scripts/reinforcement_learning/skrl/train.py --task Isaac-Aloha-Direct-vIMG --num_envs 32 --enable_cameras --headless
-```
-Train with graph:
-```
-./isaaclab.sh -p scripts/reinforcement_learning/skrl/train.py --task Isaac-Aloha-Direct-vG --num_envs 32 --enable_cameras --headless
-```
-
 Train new nav:
 ```
 ./isaaclab.sh -p scripts/demos/sac_gmo.py
