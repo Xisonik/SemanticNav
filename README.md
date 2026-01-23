@@ -10,6 +10,14 @@ The installation process fully complies with the official Isaac Lab documentatio
 
 The launch is carried out in accordance with the official documentation. The name of the environment - Isaac-Aloha-Direct-v0
 The SAC algorithm of the skrl library is used here.
+Install requirements:
+```
+pip install -r requirements.txt
+```
+or
+```
+conda env create -f environment.yml
+```
 
 link for all data and assets:
 ```
