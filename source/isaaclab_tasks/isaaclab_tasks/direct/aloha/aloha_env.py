@@ -103,7 +103,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     num_total_objects = 14 #36 12 num_total_objects * 5
 
     observation_space = gym.spaces.Dict({
-        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2061,), dtype=np.float32),  #518 512*4+4+2
+        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2060,), dtype=np.float32),  #518 512*4+4+2
         "orientation": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(1,), dtype=np.float32),
         "graph": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(24*17,), dtype=np.float32)
     })
@@ -626,7 +626,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # Тогда:
         #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
         relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
-        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w), relative_yaw.unsqueeze(1)], dim=-1)
+        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
         # print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
         obs = {
             "img": obs_img,          # нормализуем
@@ -1147,6 +1147,8 @@ class WheeledRobotEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
         extras = dict()
         extras["Episode/success_rate"] = float(self.success_rate)
+        extras["Episode/angle"] = float(self.cur_angle_error)
+        extras["Episode/radius"] = float(self.mean_radius)
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
         num_envs = len(env_ids)

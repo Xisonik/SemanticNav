@@ -103,7 +103,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     num_total_objects = num_total_objects #36 12 num_total_objects * 5
 
     observation_space = gym.spaces.Dict({
-        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2062,), dtype=np.float32),  #518 512*4+4+2
+        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(512*4 + 12,), dtype=np.float32),  #518 512*4+4+2
         "orientation": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(1,), dtype=np.float32),
         "graph": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(24*num_total_objects,), dtype=np.float32)
     })
@@ -182,6 +182,7 @@ class WheeledRobotEnv(DirectRLEnv):
     cfg: WheeledRobotEnvCfg
 
     def __init__(self, cfg: WheeledRobotEnvCfg, render_mode: str | None = None, **kwargs):
+        print(cfg)
         self._super_init = True
         self.current_dir = os.getcwd()
         self.config_path=os.path.join(self.current_dir, "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/scene_items.json")
@@ -201,6 +202,9 @@ class WheeledRobotEnv(DirectRLEnv):
             )
         self._super_init = False
         self.eval = False
+        self.EVAL = False
+        self.random_actions = False
+
         self.eval_name = "CI_prelast"
         self.eval_printed = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
@@ -279,9 +283,11 @@ class WheeledRobotEnv(DirectRLEnv):
         self.history_index = 0
         self.history_len = torch.zeros(self.num_envs, device=self.device)
         self._step_update_counter = 0
-        self.mean_radius = 3.5
-        self.max_angle_error = 0.3 * torch.pi
-        self.cur_angle_error = torch.pi * 0.3
+        self.mean_radius = 5
+        self.max_angle_error = 1 * torch.pi
+        self.cur_angle_error = 1 * torch.pi
+        self.CL_ON = True
+
         self.warm = True
         self.warm_len = 2000
         self.without_imitation = self.warm_len / 2
@@ -344,6 +350,11 @@ class WheeledRobotEnv(DirectRLEnv):
         self.prev_root_quat = torch.zeros_like(self._robot.data.root_quat_w)
         if self.DEBUG_TIME:
             self.operations_times = {}
+
+
+        self.choose_speed_step = 0
+        self.choosen_linear_speed = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+        self.choosen_angular_speed = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
 
     def _log_scene_debug(self, env_ids: torch.Tensor, step: int, reason: str = ""):
         if len(env_ids) == 0: return
@@ -418,7 +429,18 @@ class WheeledRobotEnv(DirectRLEnv):
         print(f"|")
         print(f"| Turn on obstacles always: {self.turn_on_obstacles_always}")
         print(f"|")
+        print(f"| Turn on curriculum learnong: {self.CL_ON}")
+        print(f"|")
+        print(f"| Turn on random actions: {self.random_actions}")
+        print(f"|")
         print(f"_______[ CONGIFG INFO CLOSE ]_______")
+        if self.EVAL: #we have 2 eval and EVAL, change it
+            print(f"|")
+            print(f"|")
+            print(f"______!!ATTENTION!!_____")
+            print(f"|")
+            print(f"|")
+            print("!!! IT IS EVAL NOW in ALOHA_ENV !!!")
 
     def _setup_scene(self):
         from isaaclab.sensors import ContactSensor
@@ -627,8 +649,9 @@ class WheeledRobotEnv(DirectRLEnv):
         #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
         relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
         dist = torch.norm(to_goal, dim=1)
-        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w), relative_yaw.unsqueeze(1), dist.unsqueeze(1)], dim=-1)
-        # print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
+        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
+        if self.EVAL:
+            print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°"), relative_yaw.unsqueeze(1)
         obs = {
             "img": obs_img,          # нормализуем
             "orientation": relative_yaw.unsqueeze(1),
@@ -663,18 +686,40 @@ class WheeledRobotEnv(DirectRLEnv):
         r = self.cfg.wheel_radius
         L = self.cfg.wheel_distance
         self._step_update_counter += 1
-        if self.turn_on_controller or self.imitation:
-            self.turn_on_controller_step += 1
-            # Получаем текущую ориентацию (yaw) из кватерниона
-            quat = self._robot.data.root_quat_w
-            siny_cosp = 2 * (quat[:, 0] * quat[:, 3] + quat[:, 1] * quat[:, 2])
-            cosy_cosp = 1 - 2 * (quat[:, 2] * quat[:, 2] + quat[:, 3] * quat[:, 3])
-            yaw = torch.atan2(siny_cosp, cosy_cosp)
-            linear_speed, angular_speed = self.control_module.compute_controls(
-                self.to_local(self._robot.data.root_pos_w[:, :2],env_ids),
-                yaw
-            )
-            # angular_speed = -angular_speed 
+        if self.turn_on_controller or self.imitation or self.random_actions:
+            if not self.random_actions:
+                self.turn_on_controller_step += 1
+                # Получаем текущую ориентацию (yaw) из кватерниона
+                quat = self._robot.data.root_quat_w
+                siny_cosp = 2 * (quat[:, 0] * quat[:, 3] + quat[:, 1] * quat[:, 2])
+                cosy_cosp = 1 - 2 * (quat[:, 2] * quat[:, 2] + quat[:, 3] * quat[:, 3])
+                yaw = torch.atan2(siny_cosp, cosy_cosp)
+                linear_speed, angular_speed = self.control_module.compute_controls(
+                    self.to_local(self._robot.data.root_pos_w[:, :2],env_ids),
+                    yaw
+                )
+                # angular_speed = -angular_speed 
+            else:
+                self.choose_speed_step += 1
+                if self.choose_speed_step > 8:
+                    self.choose_speed_step = 0
+                    possible_linear_speed = torch.tensor([0.2, 0.4, 0.6, 0.8, 1], device=self.device)
+
+                    # Случайный выбор угла для каждого окружения в env_ids
+                    E = len(env_ids)
+                    random_indices = torch.randint(0, len(possible_linear_speed), (E,), device=self.device)
+                    self.choosen_linear_speed = possible_linear_speed[random_indices]
+
+                    possible_angular_speed = torch.tensor([0, 1.6,  -1.6], device=self.device)
+
+                    # Случайный выбор угла для каждого окружения в env_ids
+                    E = len(env_ids)
+                    random_indices = torch.randint(0, len(possible_angular_speed), (E,), device=self.device)
+                    self.choosen_angular_speed = possible_angular_speed[random_indices]
+
+                linear_speed = self.choosen_linear_speed
+                angular_speed = self.choosen_angular_speed
+
             self._actions[:, 0] = (linear_speed / 0.6) - 1
             self._actions[:, 1] = angular_speed / 2
             actions.copy_(self._actions.clamp(-1.0, 1.0))
@@ -682,6 +727,8 @@ class WheeledRobotEnv(DirectRLEnv):
             self.turn_off_controller_step += 1
             linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
+        
+
         # linear_speed = torch.zeros_like(linear_speed, device=self.device)
         self.angular_speed = angular_speed
         self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
@@ -883,7 +930,6 @@ class WheeledRobotEnv(DirectRLEnv):
         # print(turnes, goal_bonus, out.float())
         reward = -0.01 + turnes + collision_penalty + timeout_penalty + goal_bonus
         # print(reward)
-
         died, _ = self._get_dones(self.my_episode_lenght - 1, inner=True)
         if torch.any(died):
             sr = self.update_success_rate(goal_reached)
@@ -1193,7 +1239,8 @@ class WheeledRobotEnv(DirectRLEnv):
         self._desired_pos_w[env_ids, :3] = goal_pos_local 
         self._desired_pos_w[env_ids, :2] = self.to_global(goal_pos_local , env_ids)
 
-        self.curriculum_learning_module(env_ids) 
+        if self.CL_ON:
+            self.curriculum_learning_module(env_ids) 
 
         if self.turn_on_controller_step > self.my_episode_lenght and self.turn_on_controller:
             self.turn_on_controller_step = 0
@@ -1270,6 +1317,7 @@ class WheeledRobotEnv(DirectRLEnv):
                 min_dist=1.2,
                 max_dist=8.0,
                 angle_error=self.cur_angle_error,
+                ev=self.EVAL
             )
         robot_pos  = robot_pos_local
         # print("robot_pos_local ", robot_pos_local)

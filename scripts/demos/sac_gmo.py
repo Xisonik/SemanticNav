@@ -375,6 +375,10 @@ class OrientationModule(nn.Module):
         
         # Soft embedding через softmax (differentiable)
         probs = F.softmax(logits, dim=-1)  # [B, num_bins]
+        top3_probs, top3_indices = torch.topk(probs[0], k=3)  # для первой сцены
+        bin_size = (2 * torch.pi) / self.num_bins
+        if EVAL:
+            print(f"Top-3 angles: {[f'{((idx*bin_size + bin_size/2 - torch.pi)*180/torch.pi):.1f}° (prob={prob:.3f})' for prob, idx in zip(top3_probs, top3_indices)]}")
         orientation_emb = self.embedding_proj(probs)  # [B, emb_dim]
         
         outputs = {'orientation_logits': logits}
@@ -801,6 +805,7 @@ cfg["random_timesteps"] = 0
 cfg["learning_starts"] = 100
 cfg["grad_norm_clip"] = 0
 cfg["learn_entropy"] = True
+# cfg["initial_entropy_value"] = 0.15  # ← Фиксированное значение
 cfg["entropy_learning_rate"] = 5e-3
 cfg["initial_entropy_value"] = 1.0
 
@@ -837,13 +842,14 @@ if not EVAL:
         print(f"{'='*60}")
         print("Debug mode ON - will print detailed info on first forward passes")
         print(f"{'='*60}\n")
-    
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-26_19-46-53-752427_SAC/checkpoints/agent_23000.pt"
+    agent.load(checkpoint_path)
     trainer.train()
 else:
-    cfg_trainer = {"timesteps": 1000}
+    cfg_trainer = {"timesteps": 1500}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
-    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-23_10-47-31-079515_SAC/checkpoints/agent_8000.pt"
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-26_19-46-53-752427_SAC/checkpoints/agent_23000.pt"
     agent.load(checkpoint_path)
 
     trainer.eval()

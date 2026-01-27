@@ -1278,7 +1278,7 @@ class SceneManager:
         return self.goal_positions[env_ids]
 
     # ----------- Размещение робота -----------
-    def place_robot_for_goal(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
+    def place_robot_for_goal(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float, ev=False):
         num_envs = len(env_ids)
         goal_pos = self.goal_positions[env_ids]
         # print("goal: ", goal_pos)
@@ -1320,7 +1320,7 @@ class SceneManager:
         final_yaw = base_yaw + error #+ torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
         # print(final_yaw)
         # final_yaw = torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
-        if mean_dist >= 5:
+        if mean_dist >= 5 or ev:
             final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
         robot_quats = torch.zeros(num_envs, 4, device=self.device)
         robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
