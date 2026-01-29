@@ -1483,7 +1483,7 @@ class WheeledRobotEnv(DirectRLEnv):
                     self.success_ep_num = 0
                     old_mr = self.mean_radius
                     old_a = self.cur_angle_error
-                    self.cur_angle_error += self.max_angle_error / 3
+                    self.cur_angle_error += self.max_angle_error / 7
                     print("[ sr ]: ", round(self.success_rate, 2), self.sr_stack_capacity)
                     angle_treashhold = self.max_angle_error
                     # if self.mean_radius <= 1.5 or self.mean_radius >= 3:

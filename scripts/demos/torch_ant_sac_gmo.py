@@ -378,7 +378,7 @@ class OrientationModule(nn.Module):
         orientation_emb = self.embedding_proj(probs)  # [B, emb_dim]
         
         outputs = {'orientation_logits': logits}
-        
+        print(f"probs: {probs.shape}")
         # Если есть ground truth - вычисляем loss и accuracy
         if ground_truth_yaw is not None:
             if ground_truth_yaw.dim() == 2:
@@ -400,7 +400,6 @@ class OrientationModule(nn.Module):
             outputs['orientation_loss'] = loss
             outputs['orientation_label'] = labels
             outputs['orientation_accuracy'] = accuracy
-            
             if DEBUG and not hasattr(self, '_debug_forward_printed'):
                 print(f"\n[OrientationModule.forward] First call:")
                 print(f"  img: {img.shape}, graph_emb: {graph_emb.shape}")
@@ -417,8 +416,8 @@ class OrientationModule(nn.Module):
 # ---------------------------------------------------------------------
 # CLI аргументы / seed
 # ---------------------------------------------------------------------
-EVAL = False
-# EVAL = True
+# EVAL = False
+EVAL = True
 
 set_seed(42)
 
@@ -638,14 +637,14 @@ if EVAL:
         task_name="Isaac-Aloha-Direct-v0",
         num_envs=1,
         headless=True,
-        cli_args=["--enable_cameras", "--video"],
+        cli_args=["--enable_cameras", "--video", "--livestream", "2",],
     )
-    env = RecordVideo(
-        env,
-        video_folder="logs/skrl/aloha/videos",
-        name_prefix="aloha_eval",
-        episode_trigger=lambda ep: True,
-    )
+    # env = RecordVideo(
+    #     env,
+    #     video_folder="logs/skrl/aloha/videos",
+    #     name_prefix="aloha_eval",
+    #     episode_trigger=lambda ep: True,
+    # )
 else:
     print("[INFO] Running training...")
     env = load_isaaclab_env(
@@ -840,10 +839,10 @@ if not EVAL:
     
     trainer.train()
 else:
-    cfg_trainer = {"timesteps": 1000}
+    cfg_trainer = {"timesteps": 1500}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
-    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-20_23-55-14-244298_SAC/checkpoints/agent_80000.pt"
+    checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_ppo_orientation/26-01-29_14-19-59-795327_SAC/checkpoints/agent_4000.pt"
     agent.load(checkpoint_path)
 
     trainer.eval()

@@ -318,7 +318,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.start_mean_radius = 0
         self.min_level_radius = 0
         self.sr_treshhold = 85
-        self.LOG = False
+        self.LOG = True
         import json
         from tabulate import tabulate
         self.debug_log_dir = os.path.join(os.getcwd(), "debug_logs")
@@ -627,7 +627,7 @@ class WheeledRobotEnv(DirectRLEnv):
         #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
         relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
         obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
-        # print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
+        print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
         obs = {
             "img": obs_img,          # нормализуем
             "orientation": relative_yaw.unsqueeze(1),
@@ -899,6 +899,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # if self.tensorboard_step % 100 == 0:
         #     self.tensorboard_writer.add_scalar("Metrics/reward", torch.sum(reward), self.tensorboard_step)
         self.previous_distance_error = r_error
+        print("reward", reward)
         return reward
     
     def quat_rotate(self, quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
@@ -1102,7 +1103,7 @@ class WheeledRobotEnv(DirectRLEnv):
         angle = torch.acos(cos_angle)
         angle_degrees = torch.abs(angle) * 180.0 / 3.141592653589793
         # Проверяем, что угол меньше порога
-        out = angle_degrees > 120
+        out = angle_degrees > 500
         # if torch.any(out):
         #     print("out: ", out)
 

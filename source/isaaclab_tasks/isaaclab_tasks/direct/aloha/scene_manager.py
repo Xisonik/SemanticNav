@@ -375,7 +375,7 @@ class SceneManager:
         self.raw_config = raw
         self.config = raw['objects']
         self.type_placements_cfg = raw.get('type_placements', {})
-        self.codebook = self._load_codebook("/home/xiso/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha/cdecode_dict.json")
+        self.codebook = self._load_codebook("source/isaaclab_tasks/isaaclab_tasks/direct/aloha/cdecode_dict.json")
     # в __init__ SceneManager:
         base = {
             'red':[1,0,0],'green':[0,1,0],'blue':[0,0,1],
@@ -1281,68 +1281,32 @@ class SceneManager:
     def place_robot_for_goal(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
         num_envs = len(env_ids)
         goal_pos = self.goal_positions[env_ids]
-        # print("goal: ", goal_pos)
-        is_floor_obstacle = (self.active[env_ids] == True) & (self.on_surface_idx[env_ids] == -1)
-        obstacle_pos_all = self.positions[env_ids, :, :2].clone()
-        _ = self.radii.expand(self.num_envs, -1)[env_ids]  # kept for possible future use
-        inf_pos = torch.full_like(obstacle_pos_all, 999.0)
-        obstacle_pos = torch.where(is_floor_obstacle.unsqueeze(-1), obstacle_pos_all, inf_pos)
-
-        mean_dist_with_shift = mean_dist + 1.31
-        # print("mean_dist_with_shift", mean_dist_with_shift)
-        radii = torch.normal(mean=mean_dist_with_shift, std=0.1, size=(num_envs, 1), device=self.device).clamp_(min_dist, max_dist)
-        # print("radii: ", radii)
-        candidates = goal_pos[:, None, :2] + radii.unsqueeze(1) * self.candidate_vectors
-        # print("candidates: ", candidates)
+        
         bounds = self.room_bounds
-        in_bounds_mask = (
-            (candidates[..., 0] >= bounds['x_min'] + self.robot_radius) &
-            (candidates[..., 0] <= bounds['x_max'] - self.robot_radius) &
-            (candidates[..., 1] >= bounds['y_min'] + self.robot_radius) &
-            (candidates[..., 1] <= bounds['y_max'] - self.robot_radius)
-        )
-        # print("in_bounds_mask: ", in_bounds_mask)
-        in_bounds_mask_float = in_bounds_mask.float() + 1e-9
-        chosen_angle_idx = torch.multinomial(in_bounds_mask_float, 1).squeeze(-1)
-        batch_indices = torch.arange(num_envs, device=self.device)
-        final_robot_positions = candidates[batch_indices, chosen_angle_idx]
-
-        no_valid_pos_mask = ~in_bounds_mask.any(dim=1)
-        if torch.any(no_valid_pos_mask):
-            fallback_pos = goal_pos[:, :2] + torch.tensor([max_dist, 0.0], device=self.device)
-            final_robot_positions[no_valid_pos_mask] = fallback_pos[no_valid_pos_mask]
-
+        
+        # Случайное размещение робота в пределах комнаты
+        x_range = bounds['x_max'] - bounds['x_min'] - 4 * self.robot_radius
+        y_range = bounds['y_max'] - bounds['y_min'] - 4 * self.robot_radius
+        
+        random_x = torch.rand(num_envs, device=self.device) * x_range + (bounds['x_min'] + 2*self.robot_radius)
+        random_y = torch.rand(num_envs, device=self.device) * y_range + (bounds['y_min'] + 2*self.robot_radius)
+        
+        final_robot_positions = torch.stack([random_x, random_y], dim=1)
         final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
-
+        # Случайная ориентация робота
         direction_to_goal = goal_pos[:, :2] - final_robot_positions
         base_yaw = torch.atan2(direction_to_goal[:, 1], direction_to_goal[:, 0])
         error = (torch.rand(num_envs, device=self.device) - 0.5) * 2 * angle_error
-        # print("tata")
-        # print(error)
-        final_yaw = base_yaw + error #+ torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
-        # print(final_yaw)
-        final_yaw = torch.zeros_like(base_yaw + error, device=self.device)
-        try:
-            # Пытаемся получить ориентации из config
-            final_yaw = config["orientation"]
-        except KeyError as e:
-            # Выводим содержимое словаря config для отладки
-            print(f"[ERROR] KeyError in place_robot_for_goal: {e}")
-            print(f"[DEBUG] Config dictionary keys: {list(config.keys())}")
-            print(f"[DEBUG] Config dictionary content: {config}")
-            
-            # Создаем тензор нулей в качестве fallback
-            final_yaw = torch.zeros(num_envs, device=self.device)
-            print(f"[INFO] Using zero orientations as fallback")
-        # print(final_yaw)
-        # final_yaw = torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
-        final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
+        final_yaw = torch.rand(num_envs, device=self.device) * 2 * math.pi
+        
+        # Создание кватернионов для ориентации
         robot_quats = torch.zeros(num_envs, 4, device=self.device)
         robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
         robot_quats[:, 3] = torch.sin(final_yaw / 2.0)
-
-        # print(env_ids, final_robot_positions)
+        
+        # Удаление препятствий, которые пересекаются с роботом
         self.remove_colliding_obstacles(env_ids, final_robot_positions)
+        
         return final_robot_positions, robot_quats
 
     def remove_colliding_obstacles(self, env_ids: torch.Tensor, robot_positions: torch.Tensor):
