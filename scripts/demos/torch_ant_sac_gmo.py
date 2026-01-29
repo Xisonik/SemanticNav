@@ -378,7 +378,6 @@ class OrientationModule(nn.Module):
         orientation_emb = self.embedding_proj(probs)  # [B, emb_dim]
         
         outputs = {'orientation_logits': logits}
-        print(f"probs: {probs.shape}")
         # Если есть ground truth - вычисляем loss и accuracy
         if ground_truth_yaw is not None:
             if ground_truth_yaw.dim() == 2:
@@ -684,7 +683,7 @@ memory = RandomMemory(memory_size=10000, num_envs=env.num_envs, device=device)
 # Shared graph module (one instance)
 # ---------------------------------------------------------------------
 shared_graph = SharedGraphModule(
-    embeddings_path="/home/xiso/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha/text_embeddings.pt",
+    embeddings_path="source/isaaclab_tasks/isaaclab_tasks/direct/aloha/text_embeddings.pt",
     num_nodes=NUM_GRAPH_NODES,
     per_object_dim=PER_OBJECT_DIM,
     text_dim=TEXT_EMB_DIM,

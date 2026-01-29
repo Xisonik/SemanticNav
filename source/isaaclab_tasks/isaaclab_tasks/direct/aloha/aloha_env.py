@@ -627,7 +627,8 @@ class WheeledRobotEnv(DirectRLEnv):
         #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
         relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
         obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
-        print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
+        if self.cur_step % 4 == 0:
+            print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
         obs = {
             "img": obs_img,          # нормализуем
             "orientation": relative_yaw.unsqueeze(1),
