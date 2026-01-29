@@ -375,6 +375,9 @@ class OrientationModule(nn.Module):
         
         # Soft embedding через softmax (differentiable)
         probs = F.softmax(logits, dim=-1)  # [B, num_bins]
+        top3_probs, top3_indices = torch.topk(probs[0], k=3)  # для первой сцены
+        bin_size = (2 * torch.pi) / self.num_bins
+        print(f"Top-3 angles: {[f'{((idx*bin_size + bin_size/2 - torch.pi)*180/torch.pi):.1f}° (prob={prob:.3f})' for prob, idx in zip(top3_probs, top3_indices)]}")
         orientation_emb = self.embedding_proj(probs)  # [B, emb_dim]
         
         outputs = {'orientation_logits': logits}
