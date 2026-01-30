@@ -1292,7 +1292,7 @@ class SceneManager:
         random_y = torch.rand(num_envs, device=self.device) * y_range + (bounds['y_min'] + 2*self.robot_radius)
         
         final_robot_positions = torch.stack([random_x, random_y], dim=1)
-        final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
+        # final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
         # Случайная ориентация робота
         direction_to_goal = goal_pos[:, :2] - final_robot_positions
         base_yaw = torch.atan2(direction_to_goal[:, 1], direction_to_goal[:, 0])

@@ -332,6 +332,7 @@ class OrientationModule(nn.Module):
         self.device = device
         self.num_bins = num_bins
         self.emb_dim = emb_dim
+        # self.cur_t = 0
         
         if DEBUG:
             print(f"\n[OrientationModule] Initializing:")
@@ -377,7 +378,10 @@ class OrientationModule(nn.Module):
         probs = F.softmax(logits, dim=-1)  # [B, num_bins]
         top3_probs, top3_indices = torch.topk(probs[0], k=3)  # для первой сцены
         bin_size = (2 * torch.pi) / self.num_bins
-        print(f"Top-3 angles: {[f'{((idx*bin_size + bin_size/2 - torch.pi)*180/torch.pi):.1f}° (prob={prob:.3f})' for prob, idx in zip(top3_probs, top3_indices)]}")
+
+        # self.cur_t += 1
+        # if self.cur_t % 10 == 0:
+        # print(f"Top-3 angles: {[f'{((idx*bin_size + bin_size/2 - torch.pi)*180/torch.pi):.1f}° (prob={prob:.3f})' for prob, idx in zip(top3_probs, top3_indices)]}")
         orientation_emb = self.embedding_proj(probs)  # [B, emb_dim]
         
         outputs = {'orientation_logits': logits}
@@ -402,6 +406,7 @@ class OrientationModule(nn.Module):
             outputs['orientation_loss'] = loss
             outputs['orientation_label'] = labels
             outputs['orientation_accuracy'] = accuracy
+            print("accuracy ", accuracy)
             if DEBUG and not hasattr(self, '_debug_forward_printed'):
                 print(f"\n[OrientationModule.forward] First call:")
                 print(f"  img: {img.shape}, graph_emb: {graph_emb.shape}")
@@ -418,8 +423,8 @@ class OrientationModule(nn.Module):
 # ---------------------------------------------------------------------
 # CLI аргументы / seed
 # ---------------------------------------------------------------------
-# EVAL = False
-EVAL = True
+EVAL = False
+# EVAL = True
 
 set_seed(42)
 

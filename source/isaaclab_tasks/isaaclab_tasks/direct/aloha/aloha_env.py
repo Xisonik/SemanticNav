@@ -103,7 +103,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     num_total_objects = 14 #36 12 num_total_objects * 5
 
     observation_space = gym.spaces.Dict({
-        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2060,), dtype=np.float32),  #518 512*4+4+2
+        "img": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2060+4,), dtype=np.float32),  #518 512*4+4+2
         "orientation": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(1,), dtype=np.float32),
         "graph": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(24*17,), dtype=np.float32)
     })
@@ -190,6 +190,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.memory_on = True
         # self.tracker = PathTracker(num_envs=self.num_envs, device=self.device)
         self.history_length_for_memory = 4
+        self.orientation_history_length = 4
+        self.orientation_history = torch.zeros(
+            (self.num_envs, self.orientation_history_length),
+            device=self.device,
+            dtype=torch.float32
+        )
         super().__init__(cfg, render_mode, **kwargs)
         if self.memory_on:
             self.memory_manager = MemoryManager(
@@ -344,6 +350,9 @@ class WheeledRobotEnv(DirectRLEnv):
         self.prev_root_quat = torch.zeros_like(self._robot.data.root_quat_w)
         if self.DEBUG_TIME:
             self.operations_times = {}
+
+
+        
 
     def _log_scene_debug(self, env_ids: torch.Tensor, step: int, reason: str = ""):
         if len(env_ids) == 0: return
@@ -626,9 +635,11 @@ class WheeledRobotEnv(DirectRLEnv):
         # Тогда:
         #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
         relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
-        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w)], dim=-1)
-        if self.cur_step % 4 == 0:
-            print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
+        self.orientation_history = torch.roll(self.orientation_history, shifts=-1, dims=1)
+        self.orientation_history[:, -1] = relative_yaw
+        obs_img = torch.cat([embedding, root_lin_vel_w*0.1, root_ang_vel_w*0.1, self.to_local(self._desired_pos_w), self.orientation_history], dim=-1)
+        # if self.cur_step % 10 == 0:
+        # print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
         obs = {
             "img": obs_img,          # нормализуем
             "orientation": relative_yaw.unsqueeze(1),
@@ -879,10 +890,10 @@ class WheeledRobotEnv(DirectRLEnv):
         collision_penalty = -1.0 * has_contact.float()
         timeout_penalty = -2.0 * time_out.float()
 
-        goal_bonus = 2.0 * goal_reached.float()
+        goal_bonus = 4.0 * goal_reached.float()
         out = self.out_of_bounds()
         # print(turnes, goal_bonus, out.float())
-        reward = -0.01 + turnes + collision_penalty + timeout_penalty + goal_bonus - 3 * out.float()
+        reward = -0.01 + 2*turnes + collision_penalty + timeout_penalty + goal_bonus - 3 * out.float()
         # print(reward)
 
         died, _ = self._get_dones(self.my_episode_lenght - 1, inner=True)
@@ -900,7 +911,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # if self.tensorboard_step % 100 == 0:
         #     self.tensorboard_writer.add_scalar("Metrics/reward", torch.sum(reward), self.tensorboard_step)
         self.previous_distance_error = r_error
-        print("reward", reward)
+        # print("reward", reward)
         return reward
     
     def quat_rotate(self, quat: torch.Tensor, vec: torch.Tensor) -> torch.Tensor:
@@ -1388,6 +1399,17 @@ class WheeledRobotEnv(DirectRLEnv):
         # #     print(prompts[env_id])
         # self.scene_embeddings[env_ids] = self.scene_manager.get_graph_embedding(root_pos_w, env_ids)
         self.scene_embeddings[env_ids] = self.scene_manager.encode_scene_graph(env_ids)
+        # Вычислите relative_yaw для сброшенных сред (копируйте логику из _get_observations)
+        root_quat_w = self._robot.data.root_quat_w[env_ids]
+        root_pos_w = self._robot.data.root_pos_w[env_ids]
+        to_goal_world = self._desired_pos_w[env_ids] - root_pos_w
+        quat_inv = quat_conjugate(root_quat_w)
+        to_goal_local = self.quat_rotate(quat_inv, to_goal_world)
+        to_goal_local_xy = to_goal_local[:, :2]
+        relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])
+        
+        # Заполнить всю историю текущим значением
+        self.orientation_history[env_ids] = relative_yaw.unsqueeze(1).repeat(1, self.orientation_history_length)
         # self.success_rate у тебя уже float (0..100)
 
         if self.LOG and self.sr_stack_full:
