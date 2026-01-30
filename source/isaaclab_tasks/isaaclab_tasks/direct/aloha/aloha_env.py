@@ -189,6 +189,8 @@ class WheeledRobotEnv(DirectRLEnv):
         self.CAMERA = True
         self.memory_on = True
         # self.tracker = PathTracker(num_envs=self.num_envs, device=self.device)
+        
+        super().__init__(cfg, render_mode, **kwargs)
         self.history_length_for_memory = 4
         self.orientation_history_length = 4
         self.orientation_history = torch.zeros(
@@ -196,7 +198,6 @@ class WheeledRobotEnv(DirectRLEnv):
             device=self.device,
             dtype=torch.float32
         )
-        super().__init__(cfg, render_mode, **kwargs)
         if self.memory_on:
             self.memory_manager = MemoryManager(
                 num_envs=self.num_envs,
