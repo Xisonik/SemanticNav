@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Isaac Lab",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:${workspaceFolder}/source/extensions",
+                "OMNI_LOG_LEVEL": "INFO"
+            },
+            "justMyCode": false
+        }
+    ]
+}
