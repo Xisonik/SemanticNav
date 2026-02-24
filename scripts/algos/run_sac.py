@@ -30,7 +30,7 @@ TASK_NAME = "Isaac-Aloha-Direct-v0"
 EVAL = False
 VIDEO = False
 num_envs = 128
-timestepslen = 1000
+timestepslen = 1000000
 headless = True
 
 if EVAL or VIDEO:
@@ -132,7 +132,7 @@ cfg["state_preprocessor_kwargs"] = {
 # TODO: delete state_preprocessor and make image net image statistics
 
 cfg["experiment"]["write_interval"] = 10
-cfg["experiment"]["checkpoint_interval"] = 500
+cfg["experiment"]["checkpoint_interval"] = 1000
 cfg["experiment"]["directory"] = "logs/skrl/aloha_sac"
 
 agent = SAC(
@@ -174,8 +174,8 @@ def _post_with_aux(timestep, timesteps):
         save_dir = cfg["experiment"]["directory"]
         torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
         torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
-    # if timestep % 5000 == 0:
-    #     memory.save(directory="logs/skrl/memory")
+    if timestep % 6000 == 0:
+        memory.save(directory="logs/skrl/memory")
     if timestep % 100 == 0:
         metrics = env.unwrapped.get_metrics()
         print(metrics)
@@ -193,10 +193,10 @@ if not EVAL:
     if mode_1:
         checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
         graph_encoder.load_state_dict(
-            torch.load(f"{checkpoint_path}/added/graph_encoder_5000.pt")
+            torch.load(f"{checkpoint_path}/added/graph_encoder_80000.pt")
         )
         orient_module.load_state_dict(
-            torch.load(f"{checkpoint_path}/added/orient_module_5000.pt")
+            torch.load(f"{checkpoint_path}/added/orient_module_80000.pt")
         )
         graph_encoder.eval()
         orient_module.eval()
