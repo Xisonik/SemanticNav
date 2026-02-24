@@ -55,3 +55,4 @@ Asset directories should look like this by the path IsaacLab/source/isaaclab_ass
 2. Put "all_paths.json" to "IsaacLab/data/"
 3. Put "text_embeddings.pt" to "IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/"
 Also it is nessesery replace the folder "skrl" on the path miniconda3/envs/env_isaaclab/lib/python3.10/site-packages to "skrl" in pipeline
+4. Replace the "skrl" folder on the "miniconda3/envs/env_isaaclab/lib/python3.10/site-packages/skrl" path with a folder from IsaacLab
