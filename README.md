@@ -21,23 +21,11 @@ conda env create -f environment.yml
 
 link for all data and assets:
 ```
-[https://drive.google.com/drive/folders/1JpMy9bIAhsimuZCMyoscgRr9rP1W7ewi?usp=drive_link](https://drive.google.com/drive/folders/1kS6u0Z8zRGocMIzfZRqFv2DS_bSeUfiv?usp=sharing)
+https://drive.google.com/drive/folders/1sdWFHsREqW_2fmu2E2mjV8LxF6KUYaSe?usp=sharing
 ```
-Train new nav:
+Train navigation:
 ```
-./isaaclab.sh -p scripts/demos/sac_gmo.py
-```
-Play:
-```
-./isaaclab.sh -p scripts/reinforcement_learning/skrl/play.py --task Isaac-Aloha-Direct-v0 --algorithm SAC --num_envs 1 --checkpoint /home/xiso/IsaacLab/logs/skrl/aloha/2025-08-11_09-55-36_ppo_torch_SAC/checkpoints/agent_14000.pt --enable_cameras
-```
-If you want check inference with metrics set in aloha_env.py:
-```
-self.eval = True
-```
-If you want record video you should add:
-```
---video --video_length 512
+./isaaclab.sh -p scripts/algos/run_sac.py
 ```
 
 Imitation learning:
@@ -49,7 +37,7 @@ To generate paths via dijkstra algo (Check, that there no all_paths.json in data
 ```
 ./isaaclab.sh -p source/isaaclab_tasks/isaaclab_tasks/direct/aloha/path_generator.py 
 ```
-
+1. Put aloha_assets.zip and unzip it to IsaacLab/source/isaaclab_assets/data/
 Asset directories should look like this by the path IsaacLab/source/isaaclab_assets/data/:
 ```
 └── aloha_assets
@@ -64,5 +52,6 @@ Asset directories should look like this by the path IsaacLab/source/isaaclab_ass
             ├── kitchen_new_simple.usd
             └── table
 ```
-And folder "data" to "IsaacLab/"
+2. Put "all_paths.json" to "IsaacLab/data/"
+3. Put "text_embeddings.pt" to "IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/"
 Also it is nessesery replace the folder "skrl" on the path miniconda3/envs/env_isaaclab/lib/python3.10/site-packages to "skrl" in pipeline

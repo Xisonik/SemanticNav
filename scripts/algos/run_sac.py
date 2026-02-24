@@ -30,7 +30,7 @@ TASK_NAME = "Isaac-Aloha-Direct-v0"
 EVAL = False
 VIDEO = False
 num_envs = 128
-timestepslen = 3000000
+timestepslen = 1000
 headless = True
 
 if EVAL or VIDEO:
@@ -216,13 +216,13 @@ else:
     #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt")
     # )
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
-    agent_path = f"{checkpoint_path}/26-02-23_13-15-50-947967_SAC/checkpoints/agent_5000.pt"
+    agent_path = f"{checkpoint_path}/26-02-23_16-49-28-377932_SAC/checkpoints/agent_80000.pt"
     agent.load(agent_path)
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/graph_encoder_5000.pt")
+        torch.load(f"{checkpoint_path}/added/graph_encoder_80000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/orient_module_5000.pt")
+        torch.load(f"{checkpoint_path}/added/orient_module_80000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()

@@ -424,22 +424,24 @@ class SAC(Agent):
                 ) / 2
 
             # ============ ORIENTATION LOSS INTEGRATION ============
-            localization_weight = 0.0  # НАЧНИ С МАЛОГО ВЕСА
-            
             if 'orientation_loss' in critic_1_outputs:
                 orient_loss = critic_1_outputs['orientation_loss']
-                
+                # orient_accuracy = critic_1_outputs.get('orientation_accuracy', None)
+                localization_weight = 1.2 #1.2  # НАЧНИ С МАЛОГО ВЕСА
+                # if orient_accuracy.item() > 0.90:
+                #     localization_weight = 0.6
+                # if orient_accuracy.item() > 0.97:
+                #     localization_weight = 0.1
                 # КРИТИЧНО: ДОБАВЛЯЕМ К CRITIC LOSS
+                # print("CHECK MY: ", critic_loss, orient_loss, localization_weight * orient_loss)
                 critic_loss = critic_loss + localization_weight * orient_loss
                 
                 # Логирование (только первый gradient step каждого update)
                 if self.write_interval > 0 and gradient_step == 0:
                     orient_accuracy = critic_1_outputs.get('orientation_accuracy', None)
-                    
                     self.track_data("Localization / Orientation Loss", orient_loss.item())
                     if orient_accuracy is not None:
                         self.track_data("Localization / Orientation Accuracy", orient_accuracy.item())
-                    
                     # DEBUG: детальная информация
                     if DEBUG and timestep % 1000 == 0:
                         print(f"\n[SAC._update] Timestep {timestep}:")
@@ -572,6 +574,16 @@ class SAC(Agent):
                 self.track_data("Target / Target (max)", torch.max(target_values).item())
                 self.track_data("Target / Target (min)", torch.min(target_values).item())
                 self.track_data("Target / Target (mean)", torch.mean(target_values).item())
+                if 'orientation_accuracy' in critic_1_outputs:
+                    self.track_data("Localization / Accuracy (±10°)", critic_1_outputs['orientation_accuracy'].item())
+                if 'orientation_accuracy_strict' in critic_1_outputs:
+                    self.track_data("Localization / Accuracy (strict)", critic_1_outputs['orientation_accuracy_strict'].item())
+                if 'orientation_confidence' in critic_1_outputs:
+                    self.track_data("Localization / Confidence", critic_1_outputs['orientation_confidence'].item())
+                if 'orientation_entropy' in critic_1_outputs:
+                    self.track_data("Localization / Entropy", critic_1_outputs['orientation_entropy'].item())
+                if 'orientation_mean_error_deg' in critic_1_outputs:
+                    self.track_data("Localization / Mean Error (deg)", critic_1_outputs['orientation_mean_error_deg'].item())
 
                 if self._learn_entropy:
                     self.track_data("Loss / Entropy loss", entropy_loss.item())
