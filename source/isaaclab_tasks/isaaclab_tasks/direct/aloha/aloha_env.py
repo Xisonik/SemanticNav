@@ -51,7 +51,7 @@ from pxr import Gf
 import json
 import time
 
-NUM_GRAPH_NODES = 17
+NUM_GRAPH_NODES = 21
 class WheeledRobotEnvWindow(BaseEnvWindow):
     def __init__(self, env: 'WheeledRobotEnv', window_name: str = "IsaacLab"):
         super().__init__(env, window_name)

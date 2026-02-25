@@ -19,7 +19,7 @@ from torch_geometric.nn import GATv2Conv, global_mean_pool
 # =====================================================================
 # Константы
 # =====================================================================
-NUM_GRAPH_NODES = 17
+NUM_GRAPH_NODES = 21
 PER_OBJECT_DIM = 24
 TEXT_EMB_DIM = 16
 GRAPH_EMB_DIM = 128

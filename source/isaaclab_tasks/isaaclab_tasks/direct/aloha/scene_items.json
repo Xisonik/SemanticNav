@@ -56,7 +56,7 @@
           "position": []
         },
       "type": ["staff_obstacle"],
-      "count": 1,
+      "count": 2,
       "size": [0.35, 0.35, 0.9],
       "usd_paths": ["scenes/obstacles/chair2.usd"]
     },
@@ -67,8 +67,8 @@
           "add_info": [],
           "position": []
         },
-      "type": ["staff_obstacle"],
-      "count": 1,
+      "type": ["movable_obstacle"],
+      "count": 4,
       "size": [0.35, 0.35, 0.9],
       "usd_paths": ["scenes/obstacles/chair3.usd"]
     },
@@ -195,19 +195,26 @@
   ],
   "type_placements": {
     "surface_provider": {
-      "strategy": "grid_with_orient",
+      "strategy": "grid",
       "grid_coordinates": [
         [4, 0, 0.0], [-4, 0, 0.0]
       ]
     },
     "goal_possible_positions": {
-      "strategy": "grid_with_orient",
+      "strategy": "grid",
       "grid_coordinates": [
         [4, 0, 0.0], [-4, 0, 0.0]
       ]
     },
+    "movable_obstacle": {
+      "strategy": "grid",
+      "grid_coordinates": [
+        [1.5, -0.5, 0.0], [-1.5, -0.5, 0.0],
+        [1.5, 0.5, 0.0], [-1.5, 0.5, 0.0]
+      ]
+    },
     "staff_obstacle": {
-      "strategy": "grid_with_orient",
+      "strategy": "grid",
       "grid_coordinates": [
         [-2, 4, 0.0], [0, 4, 0.0], [2, 4, 0.0], 
         [-2, -4, 0.0], [0, -4, 0.0], [2, -4, 0.0], 

@@ -30,7 +30,7 @@ TASK_NAME = "Isaac-Aloha-Direct-v0"
 EVAL = False
 VIDEO = False
 num_envs = 128
-timestepslen = 1000000
+timestepslen = 100000
 headless = True
 
 if EVAL or VIDEO:
@@ -150,8 +150,8 @@ aux_trainer = AuxModuleTrainer(
     device=device,
     lr_graph=3e-4,
     lr_orient=3e-4,
-    batch_size=512,
-    train_steps_per_call=2,
+    batch_size=1024,
+    train_steps_per_call=1,
     log_interval=50,
 )
 
@@ -174,7 +174,7 @@ def _post_with_aux(timestep, timesteps):
         save_dir = cfg["experiment"]["directory"]
         torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
         torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
-    if timestep % 6000 == 0:
+    if timestep % 2000 == 0:
         memory.save(directory="logs/skrl/memory")
     if timestep % 100 == 0:
         metrics = env.unwrapped.get_metrics()
@@ -189,23 +189,33 @@ def _post_with_aux(timestep, timesteps):
 
 agent.post_interaction = _post_with_aux
 
+USE_PRETRAINED = False
+if mode_1:
+    USE_PRETRAINED = True
 if not EVAL:
-    if mode_1:
+    if USE_PRETRAINED:
         checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
+        # graph_encoder.load_state_dict(
+        #     torch.load(f"{checkpoint_path}/added/graph_encoder_80000.pt")
+        # )
+        # orient_module.load_state_dict(
+        #     torch.load(f"{checkpoint_path}/added/orient_module_80000.pt")
+        # )
         graph_encoder.load_state_dict(
-            torch.load(f"{checkpoint_path}/added/graph_encoder_80000.pt")
+            torch.load(f"logs/skrl/aloha_sac/added/graph_encoder_pretrained_best.pt")
         )
         orient_module.load_state_dict(
-            torch.load(f"{checkpoint_path}/added/orient_module_80000.pt")
+            torch.load(f"logs/skrl/aloha_sac/added/orient_module_pretrained_best.pt")
         )
-        graph_encoder.eval()
-        orient_module.eval()
+        if mode_1:
+            graph_encoder.eval()
+            orient_module.eval()
 
-        for param in graph_encoder.parameters():
-            param.requires_grad = False
+            for param in graph_encoder.parameters():
+                param.requires_grad = False
 
-        for param in orient_module.parameters():
-            param.requires_grad = False
+            for param in orient_module.parameters():
+                param.requires_grad = False
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.train()
     memory.save(directory="logs/skrl/memory")
