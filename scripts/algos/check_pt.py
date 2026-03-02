@@ -5,7 +5,7 @@ import gymnasium as gym
 from torch.utils.data import DataLoader, TensorDataset
 from skrl.memories.torch import RandomMemory
 from skrl.utils.spaces.torch import unflatten_tensorized_space
-from networks.networks import GraphEncoder, OrientationModule, DictRunningStandardScaler
+from networks.networks_orm import GraphEncoder, OrientationModule, DictRunningStandardScaler
 
 DEVICE = torch.device("cuda")
 MEMORY_DIR      = "logs/skrl/memory/memories/26-02-24_20-46-34-792695_memory_0x734a9c708ca0.pt"

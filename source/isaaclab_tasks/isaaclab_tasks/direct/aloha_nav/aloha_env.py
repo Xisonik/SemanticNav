@@ -161,7 +161,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
         self.use_controller = True
-        self.imitation = True
+        self.imitation = False
         if self.imitation:
             self.use_controller = True
         if self.use_controller:
@@ -205,7 +205,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.CL_ON = True
 
         self.warm = True
-        self.warm_len = 5000
+        self.warm_len = 2000
         self.without_imitation = self.warm_len / 2
         self.without_imitation_log = False
         self.has_contact = torch.full((self.num_envs,), True, dtype=torch.bool, device=self.device)
@@ -941,8 +941,6 @@ class WheeledRobotEnv(DirectRLEnv):
                             self.mean_radius = 0
                         elif self.mean_radius <= 1:
                             self.mean_radius = 0.5
-                        elif self.mean_radius >= 3.5:
-                            self.mean_radius = 2.5
                         else:
                             self.mean_radius += -0.5
                         self.mean_radius = max(self.min_level_radius, self.mean_radius)
