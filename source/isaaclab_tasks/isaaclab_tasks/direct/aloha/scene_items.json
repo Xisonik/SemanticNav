@@ -9,7 +9,7 @@
         },
       "type": ["static_obstacle", "surface_provider", "changeable_color"],
       "count": 2,
-      "size": [0.35, 0.35, 0.8],
+      "size": [0.25, 0.5, 0.6],
       "usd_paths": ["scenes/scenes_sber_kitchen_for_BBQ/table/table_2.usd"]
     },
     {
@@ -201,7 +201,7 @@
       ]
     },
     "goal_possible_positions": {
-      "strategy": "grid",
+      "strategy": "on_surface",
       "grid_coordinates": [
         [4, 0, 0.0], [-4, 0, 0.0]
       ]
@@ -226,7 +226,7 @@
     "surface_only": {
       "strategy": "on_surface",
       "surface_types": ["surface_provider"],
-      "margin": 0.1
+      "margin": 0.6
     }
   }
 }

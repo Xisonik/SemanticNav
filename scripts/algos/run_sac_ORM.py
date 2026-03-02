@@ -27,9 +27,9 @@ set_seed(42)
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
 TASK_NAME = "Aloha_nav"
-EVAL = False
+EVAL = True
 VIDEO = False
-USE_PRETRAINED = False
+USE_PRETRAINED = True
 
 num_envs = 2
 timestepslen = 100000
@@ -46,8 +46,10 @@ if VIDEO:
 else:
     cli_args = ["--enable_cameras"]
 
-if EVAL:
-    # from gymnasium.wrappers import RecordVideo
+if headless == False:
+    num_envs = 2
+
+if headless:
     env = load_isaaclab_env(
         task_name=TASK_NAME, 
         headless=headless, 
@@ -58,7 +60,6 @@ else:
     env = load_isaaclab_env(
         task_name=TASK_NAME, 
         num_envs=num_envs,
-        headless=headless, 
         cli_args=cli_args
     )
 
@@ -240,13 +241,13 @@ else:
     #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt")
     # )
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
-    agent_path = f"{checkpoint_path}/26-02-25_17-27-49-484258_SAC/checkpoints/agent_88000.pt"
+    agent_path = f"{checkpoint_path}/base/checkpoints/agent_100000.pt"
     agent.load(agent_path)
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/graph_encoder_88000.pt")
+        torch.load(f"{checkpoint_path}/added/archive/postrain_nav_1_img/graph_encoder_98000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/orient_module_88000.pt")
+        torch.load(f"{checkpoint_path}/added/archive/postrain_nav_1_img/orient_module_98000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()

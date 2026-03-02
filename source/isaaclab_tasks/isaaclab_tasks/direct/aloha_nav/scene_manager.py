@@ -610,7 +610,7 @@ class SceneManager:
             picked = elig_avail[perm]
             return picked.view(1, -1)
 
-        def _apply_strategy_one_env(p_type: str, env_id: int, env_ids: torch.Tensor, obj_idx_row: torch.Tensor, config):
+        def _apply_strategy_one_env(p_type: str, env_id: int, env_ids: torch.Tensor, obj_idx_row: torch.Tensor, config, mess=False):
             # print(f"[DEBUG STRATEGY] Applying {p_type} for env_id={env_id}")
             # print(f"[DEBUG STRATEGY] obj_idx_row: {obj_idx_row}")
             if obj_idx_row.numel() == 0:
@@ -657,7 +657,7 @@ class SceneManager:
                 elif p_type == "surface_only":
                     elig = idx_by_type["surface_only"]
                     picked = _sample_available_for_env(env_id, elig, k_surface_only)
-                    _apply_strategy_one_env("surface_only", env_id, env_ids, picked, config)
+                    _apply_strategy_one_env("surface_only", env_id, env_ids, picked, config, True)
                 elif p_type == "staff_obstacle":
                     elig = idx_by_type["staff_obstacle"]
                     picked = _sample_available_for_env(env_id, elig, k_staff)

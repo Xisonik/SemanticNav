@@ -201,10 +201,8 @@
       ]
     },
     "goal_possible_positions": {
-      "strategy": "grid",
-      "grid_coordinates": [
-        [4, 0, 0.0], [-4, 0, 0.0]
-      ]
+      "strategy": "on_surface",
+      "margin": 0.5
     },
     "movable_obstacle": {
       "strategy": "grid",
@@ -226,7 +224,7 @@
     "surface_only": {
       "strategy": "on_surface",
       "surface_types": ["surface_provider"],
-      "margin": 0.1
+      "margin": 0.0
     }
   }
 }
