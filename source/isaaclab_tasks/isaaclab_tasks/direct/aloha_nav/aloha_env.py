@@ -144,15 +144,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_objects = {}
         self.CAMERA = True
         self.memory_on = True
-        # self.tracker = PathTracker(num_envs=self.num_envs, device=self.device)
-        self.history_length_for_memory = 4
         super().__init__(cfg, render_mode, **kwargs)
         if self.memory_on:
             self.memory_manager = MemoryManager(
                 num_envs=self.num_envs,
                 embedding_size=512,  # Размер эмбеддинга ResNet18
                 action_size=2,      # Размер действия (линейная и угловая скорость)
-                history_length=self.history_length_for_memory,  # n = 10, можно настроить
                 device=self.device
             )
         self._super_init = False
@@ -161,7 +158,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
         self.use_controller = True
-        self.imitation = False
+        self.imitation = True
         if self.imitation:
             self.use_controller = True
         if self.use_controller:
@@ -389,7 +386,7 @@ class WheeledRobotEnv(DirectRLEnv):
         angle = torch.acos(cos_angle)
         angle = angle
         self.memory_manager.update(image_embeddings, self.velocities)
-        embedding = self.memory_manager.get_observations(m=self.history_length_for_memory)
+        embedding = self.memory_manager.get_observations()
         robot_quat = self._robot.data.root_quat_w # [num_envs, 4]
 
         # Конвертируем quaternion → yaw

@@ -2,7 +2,7 @@ import torch
 from typing import Optional
 
 class MemoryManager:
-    def __init__(self, num_envs, embedding_size, action_size, history_length, device,
+    def __init__(self, num_envs, embedding_size, action_size, device, history_length = 13,
                  dtype=torch.float32):
         self.num_envs = num_envs
         self.embedding_size = embedding_size
@@ -34,8 +34,8 @@ class MemoryManager:
             return
 
         env_ids = env_ids.to(self.device, dtype=torch.long)
-        self.embedding_history[env_ids].zero_()
-        self.action_history[env_ids].zero_()
+        self.embedding_history[env_ids] = 0
+        self.action_history[env_ids] = 0
         self.initialized[env_ids] = False
 
     @torch.no_grad()
@@ -67,129 +67,45 @@ class MemoryManager:
             self.initialized[new_mask] = True
 
         # 3) общий push-front для всех env (одним тензорным обновлением)
-        self.embedding_history = torch.cat([embeddings.unsqueeze(1), self.embedding_history[:, :-1]], dim=1)
-        self.action_history = torch.cat([actions.unsqueeze(1), self.action_history[:, :-1]], dim=1)
+        self.embedding_history = torch.roll(self.embedding_history, shifts=1, dims=1)
+        self.embedding_history[:, 0] = embeddings
+
+        self.action_history = torch.roll(self.action_history, shifts=1, dims=1)
+        self.action_history[:, 0] = actions
 
     @torch.no_grad()
-    def get_observations(self, m: int = 4, k: int = 4) -> torch.Tensor:
+    def get_observations(self, m: int = 4, k: int = 4, aggregate_actions: str = 'sum') -> torch.Tensor:
         """
-        Возвращает [N, m*(E+A)] = concat(emb_0, act_0, emb_k, act_k, ...)
+        Возвращает [N, m*(E + A)] = concat(emb_0, act_0_to_k, emb_k, act_k_to_2k, ...)
+        
+        Args:
+            m: количество сэмплируемых точек
+            k: шаг между точками
+            aggregate_actions: способ агрегации действий ('sum', 'mean', 'last')
         """
-        indices = torch.arange(0, m * k, k, device=self.device, dtype=torch.long)
-        indices = torch.clamp(indices, 0, self.history_length - 1)
-
-        sel_emb = self.embedding_history[:, indices]  # [N,m,E]
-        sel_act = self.action_history[:, indices]     # [N,m,A]
+        # Индексы для эмбеддингов
+        emb_indices = torch.arange(0, m * k, k, device=self.device, dtype=torch.long)
+        emb_indices = torch.clamp(emb_indices, 0, self.history_length - 1)
+        
+        # Получаем эмбеддинги [N, m, E]
+        sel_emb = self.embedding_history[:, emb_indices]
+        
+        # Получаем агрегированные действия для каждого окна
+        aggregated_actions = []
+        
+        for i in range(m):
+            start_idx = i * k
+            end_idx = min((i + 1) * k, self.history_length)
+            
+            window_actions = self.action_history[:, start_idx:end_idx]  # [N, window_len, A]
+            
+            if aggregate_actions == 'sum':
+                window_actions = window_actions.sum(dim=1)  # [N, A]
+            
+            aggregated_actions.append(window_actions)
+        
+        # Стек действий [N, m, A]
+        sel_act = torch.stack(aggregated_actions, dim=1)
+        
+        # Конкатенируем и решейпим
         return torch.cat([sel_emb, sel_act], dim=-1).reshape(self.num_envs, -1)
-
-
-
-class PathTracker:
-    def __init__(self, num_envs: int, T_max: int = 256, device: str = "cuda", pos_dim: int = 2):
-        """
-        Батчевый менеджер траекторий и управляющих воздействий.
-
-        Args:
-            num_envs (int): количество сред
-            T_max (int): максимальная длина траектории
-            device (str): устройство
-            pos_dim (int): размерность позиции (обычно 2 или 3)
-        """
-        self.num_envs = num_envs
-        self.T_max = T_max
-        self.device = device
-        self.pos_dim = pos_dim
-
-        # [num_envs, T_max, pos_dim]
-        self.positions = torch.zeros((num_envs, T_max, pos_dim), device=device, dtype=torch.float32)
-        # [num_envs, T_max, 2] (lin, ang)
-        self.velocities = torch.zeros((num_envs, T_max, 2), device=device, dtype=torch.float32)
-        # Счётчик длины траектории для каждой среды
-        self.lengths = torch.zeros(num_envs, device=device, dtype=torch.long)
-
-    @torch.no_grad()
-    def add_step(self, env_ids: torch.Tensor, positions: torch.Tensor, velocities: torch.Tensor):
-        """
-        Добавить позиции и управляющие воздействия в батчевом режиме.
-        Args:
-            env_ids (torch.Tensor): [K]
-            positions (torch.Tensor): [K, pos_dim]
-            velocities (torch.Tensor): [K, 2]
-        """
-        env_ids = env_ids.to(self.device)
-        idxs = self.lengths[env_ids]  # текущие индексы вставки
-        for i, env_id in enumerate(env_ids):
-            if idxs[i] < self.T_max:
-                self.positions[env_id, idxs[i]] = positions[i].to(self.device)
-                self.velocities[env_id, idxs[i]] = velocities[i].to(self.device)
-                self.lengths[env_id] += 1  # увеличиваем счётчик
-
-    def reset(self, env_ids: torch.Tensor):
-        """
-        Очистить траектории и управляющие воздействия для указанных сред.
-        """
-        env_ids = env_ids.to(self.device)
-        self.positions[env_ids] = 0.0
-        self.velocities[env_ids] = 0.0
-        self.lengths[env_ids] = 0
-
-    @torch.no_grad()
-    def compute_path_lengths(self, env_ids: torch.Tensor) -> torch.Tensor:
-        """
-        Подсчитать длину пути для агентов (евклидова сумма).
-        Returns: [K]
-        """
-        env_ids = env_ids.to(self.device)
-        pos = self.positions[env_ids]  # [K, T_max, pos_dim]
-        L = self.lengths[env_ids]      # [K]
-
-        # Считаем диффы вдоль оси T
-        diffs = pos[:, 1:] - pos[:, :-1]       # [K, T_max-1, pos_dim]
-        dist = torch.norm(diffs, dim=-1)       # [K, T_max-1]
-
-        # Маска по длине
-        mask = torch.arange(self.T_max-1, device=self.device).unsqueeze(0) < (L.unsqueeze(1)-1)
-        dist = dist * mask
-
-        return dist.sum(dim=1)
-
-    def get_paths(self, env_ids: torch.Tensor):
-        """
-        Вернуть пути агентов (с обрезкой до длины).
-        """
-        env_ids = env_ids.to(self.device)
-        out = {}
-        for i, env_id in enumerate(env_ids):
-            L = self.lengths[env_id].item()
-            out[env_id.item()] = self.positions[env_id, :L]
-        return out
-
-    def get_velocities(self, env_ids: torch.Tensor):
-        """
-        Вернуть последовательности управляющих воздействий.
-        """
-        env_ids = env_ids.to(self.device)
-        out = {}
-        for i, env_id in enumerate(env_ids):
-            L = self.lengths[env_id].item()
-            out[env_id.item()] = self.velocities[env_id, :L]
-        return out
-
-    @torch.no_grad()
-    def compute_jerk(self, env_ids: torch.Tensor, threshold: float = 0.1) -> torch.Tensor:
-        """
-        Подсчитать количество резких скачков скоростей.
-        Args:
-            threshold (float): порог
-        Returns: [K] количество скачков
-        """
-        env_ids = env_ids.to(self.device)
-        vels = self.velocities[env_ids]  # [K, T_max, 2]
-        L = self.lengths[env_ids]
-
-        diffs = torch.norm(vels[:, 1:] - vels[:, :-1], dim=-1)  # [K, T_max-1]
-
-        mask = torch.arange(self.T_max-1, device=self.device).unsqueeze(0) < (L.unsqueeze(1)-1)
-        diffs = diffs * mask
-
-        return (diffs > threshold).sum(dim=1).float()

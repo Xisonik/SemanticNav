@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from skrl.agents.torch.sac import SAC, SAC_DEFAULT_CONFIG
+from networks.sac import SAC, SAC_DEFAULT_CONFIG
 from skrl.envs.loaders.torch import load_isaaclab_env
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.memories.torch import RandomMemory
@@ -31,7 +31,7 @@ EVAL = False
 VIDEO = False
 USE_PRETRAINED = False
 
-num_envs = 128
+num_envs = 2
 timestepslen = 100000
 headless = True
 
@@ -84,15 +84,15 @@ orient_module = OrientationModule(
 graph_encoder.eval()
 orient_module.eval() # custom trainer turn it to train in train steps
 
-memory_size = 2000
+memory_size = 1500
 if num_envs == 128:
-    memory_size = 1300
+    memory_size = 1500
 elif num_envs == 64:
     memory_size = 2000
 elif num_envs == 32:
     memory_size = 5000
 print("memory size: ", memory_size)
-memory = RandomMemory(memory_size=2000, num_envs=env.num_envs, device=device)
+memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
 models = {
     "policy": StochasticActor(
