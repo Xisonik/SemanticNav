@@ -13,7 +13,7 @@ The SAC algorithm of the skrl library is used here.
 ## Installation 
 1. Execute all steps from official [installation instruction](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_installation.html), up until:
 ```
-https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_installation.html
+./isaaclab.sh --install
 ```
 2. Download all necessary data and assets:
 ```
