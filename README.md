@@ -10,7 +10,7 @@ The installation process fully complies with the official Isaac Lab documentatio
 
 The launch is carried out in accordance with the official documentation. The name of the environment - Isaac-Aloha-Direct-v0
 The SAC algorithm of the skrl library is used here.
-## Installation, 
+## Installation 
 1. Execute all steps from official [installation instruction](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_installation.html), up until:
 ```
 https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_installation.html
