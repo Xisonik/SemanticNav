@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,8 +15,6 @@ from skrl.utils import set_seed
 from networks.networks import *
 set_seed(42)
 
-
-
 """
 - Пайплайны:
     1. навигации - Aloha_nav
@@ -26,10 +25,10 @@ set_seed(42)
     headless=True,
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
-TASK_NAME = "Isaac-Aloha-Direct-v0"
+TASK_NAME = "Aloha_nav" 
 EVAL = False
 VIDEO = False
-num_envs = 128
+num_envs = 4
 timestepslen = 100000
 headless = True
 
@@ -158,9 +157,9 @@ aux_trainer = AuxModuleTrainer(
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
 experiment = start(
-    api_key="DRYfW6B6VtUQr9llvf3jup57R",
-    project_name="general",
-    workspace="xisonik"
+    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
+    project_name="robo",
+    workspace="denmanorwat"
 )
 _original_post = agent.post_interaction
 mode_1 = False
@@ -172,7 +171,7 @@ def _post_with_aux(timestep, timesteps):
 
     if timestep % 1000 == 0:
         save_dir = cfg["experiment"]["directory"]
-        torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
+        torch.save(graph_encoder.state_dict(), '/'.join([os.getcwd(), f"{save_dir}/added/graph_encoder_{timestep}.pt"]))
         torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
     if timestep % 2000 == 0:
         memory.save(directory="logs/skrl/memory")

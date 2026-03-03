@@ -29,3 +29,10 @@ __pycache__/
 *.pth
 *.ckpt
 source/isaaclab_assets/data/aloha_assets/SimReady_Furniture
+_isaac_sim/
+.vscode/*
+.vscode/*
+source/isaaclab_mimic/isaaclab_mimic.egg-info/PKG-INFO
+source/isaaclab_mimic/isaaclab_mimic.egg-info/requires.txt
+source/isaaclab_rl/isaaclab_rl.egg-info/PKG-INFO
+source/isaaclab_rl/isaaclab_rl.egg-info/requires.txt
