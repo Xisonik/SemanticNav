@@ -20,6 +20,7 @@ https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_ins
 https://drive.google.com/drive/folders/1sdWFHsREqW_2fmu2E2mjV8LxF6KUYaSe?usp=sharing
 ```
 3. Put aloha_assets.zip and unzip it to IsaacLab/source/isaaclab_assets/data/
+
 Asset directories should look like this by the path IsaacLab/source/isaaclab_assets/data/:
 ```
 └── aloha_assets
