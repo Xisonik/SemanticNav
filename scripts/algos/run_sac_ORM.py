@@ -11,7 +11,7 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 
-from networks.networks_orm import *
+from networks.networks_orm_memory import *
 set_seed(42)
 
 
@@ -27,13 +27,14 @@ set_seed(42)
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
 TASK_NAME = "Aloha_nav"
-EVAL = True
+EVAL = False
 VIDEO = False
-USE_PRETRAINED = True
+LIVESTREAM = False
+USE_PRETRAINED = False
 
-num_envs = 2
+num_envs = 128
 timestepslen = 100000
-headless = True
+headless = False
 
 if EVAL or VIDEO:
     timestepslen = 800
@@ -43,11 +44,15 @@ if VIDEO:
     from gymnasium.wrappers import RecordVideo
     num_envs = 2
     headless = True
+elif LIVESTREAM:
+    cli_args = ["--enable_cameras", "--livestream", "2"]
+    num_envs = 2
+    headless = True
 else:
     cli_args = ["--enable_cameras"]
 
 if headless == False:
-    num_envs = 2
+    num_envs = 64
 
 if headless:
     env = load_isaaclab_env(
@@ -79,7 +84,7 @@ graph_encoder = GraphEncoder(
 ).to(device)
 
 orient_module = OrientationModule(
-    img_dim=env.observation_space["img"].shape[0],
+    img_dim=env.observation_space["memory"].shape[0],
 ).to(device)
 
 graph_encoder.eval()
@@ -92,6 +97,7 @@ elif num_envs == 64:
     memory_size = 2000
 elif num_envs == 32:
     memory_size = 5000
+memory_size = 100
 print("memory size: ", memory_size)
 memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
@@ -123,19 +129,21 @@ cfg["gradient_steps"] = 1
 cfg["batch_size"] = 1024
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
-cfg["actor_learning_rate"] = 3e-4
-cfg["critic_learning_rate"] = 3e-4
+cfg["actor_learning_rate"] = 0 # 3e-4
+cfg["critic_learning_rate"] = 0 # 3e-4
 cfg["random_timesteps"] = 0
 cfg["learning_starts"] = 100
 cfg["grad_norm_clip"] = 0
 cfg["learn_entropy"] = True
-cfg["entropy_learning_rate"] = 5e-3
+cfg["entropy_learning_rate"] = 0 # 5e-3
 cfg["initial_entropy_value"] = 1.0
 
 cfg["state_preprocessor"] = DictRunningStandardScaler
 cfg["state_preprocessor_kwargs"] = {
     "size": env.observation_space,
     "img_space": env.observation_space["img"],
+    "memory_space": env.observation_space["memory"],
+    "goal_space": env.observation_space["goal"],
     "device": device,
 }
 # cfg["state_preprocessor"] = None  
@@ -159,11 +167,11 @@ aux_trainer = AuxModuleTrainer(
     agent=agent,
     obs_space=env.observation_space,
     device=device,
-    lr_graph=3e-5,
-    lr_orient=3e-5,
+    lr_graph=3e-3,
+    lr_orient=3e-3,
     batch_size=1024,
     train_steps_per_call=1,
-    log_interval=50,
+    log_interval=1000,
 )
 
 from comet_ml import start
@@ -187,9 +195,9 @@ def _post_with_aux(timestep, timesteps):
         torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
     # if timestep % 2000 == 0:
     #     memory.save(directory="logs/skrl/memory")
-    if timestep % 50 == 0:
+    if timestep % 2000 == 0:
         metrics = env.unwrapped.get_metrics()
-        if timestep % 3000 == 0:
+        if timestep % 2000 == 0:
             print(metrics)
         acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
         experiment.log_metric("success_rate", metrics["success_rate"], step=timestep)
@@ -241,13 +249,13 @@ else:
     #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt")
     # )
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
-    agent_path = f"{checkpoint_path}/base/checkpoints/agent_100000.pt"
+    agent_path = f"{checkpoint_path}/26-03-05_00-45-11-750192_SAC/checkpoints/agent_39000.pt"
     agent.load(agent_path)
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/archive/postrain_nav_1_img/graph_encoder_98000.pt")
+        torch.load(f"{checkpoint_path}/added/archive/memory/graph_encoder_36000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/archive/postrain_nav_1_img/orient_module_98000.pt")
+        torch.load(f"{checkpoint_path}/added/archive/memory/orient_module_36000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()

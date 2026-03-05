@@ -60,24 +60,27 @@ def print_orientation_accuracy(peep=False):
         error = torch.minimum(error, 2*torch.pi - error)
         
         # Accuracy при допустимой ошибке < 5 градусов (0.087 rad)
-       
-        # print(f"\n{'='*50}")
-        # print(f"EVAL COMPLETED")
-        # print(f"Total steps evaluated: {len(eval_gt_angles)}")
-        # print(f"Mean error: {error.mean().item()*180/torch.pi:.2f} degrees")
-        # print(f"Std error: {error.std().item()*180/torch.pi:.2f} degrees")
-        # print(f"Min error: {error.min().item()*180/torch.pi:.2f} degrees")
-        # print(f"Max error: {error.max().item()*180/torch.pi:.2f} degrees")
+        if peep:
+            print(f"\n{'='*50}")
+            print(f"EVAL COMPLETED")
+            print(f"Total steps evaluated: {len(eval_gt_angles)}")
+            print(f"Mean error: {error.mean().item()*180/torch.pi:.2f} degrees")
+            print(f"Std error: {error.std().item()*180/torch.pi:.2f} degrees")
+            print(f"Min error: {error.min().item()*180/torch.pi:.2f} degrees")
+            print(f"Max error: {error.max().item()*180/torch.pi:.2f} degrees")
         threshold = 10.0 * torch.pi / 180.0
         accuracy_10 = (error < threshold).float().mean().item()
-        # print(f"Orientation accuracy (<10°): {accuracy_10*100:.2f}%")
+        if peep:
+            print(f"Orientation accuracy (<10°): {accuracy_10*100:.2f}%")
         threshold = 20.0 * torch.pi / 180.0
         accuracy_20 = (error < threshold).float().mean().item()
-        # print(f"Orientation accuracy (<20°): {accuracy_20*100:.2f}%")
+        if peep:
+            print(f"Orientation accuracy (<20°): {accuracy_20*100:.2f}%")
         threshold = 30.0 * torch.pi / 180.0
         accuracy_30 = (error < threshold).float().mean().item()
-        # print(f"Orientation accuracy (<30°): {accuracy_30*100:.2f}%")
-        # print(f"{'='*50}\n")
+        if peep:
+            print(f"Orientation accuracy (<30°): {accuracy_30*100:.2f}%")
+            print(f"{'='*50}\n")
         
         # Очищаем данные после вывода
         if not peep:
@@ -369,7 +372,7 @@ class StochasticActor(GaussianMixin, Model):
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
+            pred_angle, _, _ = self.orient_module(memory, graph_emb)
 
             if True:
                 collect_orientation_data(gt_orientation, pred_angle)
@@ -414,7 +417,7 @@ class Critic(DeterministicMixin, Model):
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
+            pred_angle, _, _ = self.orient_module(memory, graph_emb)
 
         x = torch.cat([img, goal, graph_emb, actions, gt_orientation], dim=-1)
         return self.net(x), {}
@@ -480,7 +483,7 @@ class AuxModuleTrainer:
 
             # Forward (с градиентами для обоих модулей)
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, probs, logits = self.orient_module(img, graph_emb)
+            pred_angle, probs, logits = self.orient_module(memory, graph_emb)
 
             # Loss (градиенты текут и в orient, и в graph)
             loss, metrics = self.orient_module.compute_loss(logits, probs, gt_yaw)
