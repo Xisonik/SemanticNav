@@ -160,8 +160,8 @@ class WheeledRobotEnv(DirectRLEnv):
         self.random_actions = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
-        self.use_controller = True
-        self.imitation = True
+        self.use_controller = cfg.use_controller
+        self.imitation = cfg.imitation
         if self.imitation:
             self.use_controller = True
         if self.use_controller:

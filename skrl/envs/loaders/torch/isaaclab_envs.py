@@ -137,7 +137,12 @@ def load_isaaclab_env(
     parser.add_argument(
         "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
     )
-
+    parser.add_argument(
+        "--do_not_control", action="store_false", help="Whether to use the controller for the task (if available)."
+    )
+    parser.add_argument(
+        "--do_not_imitate", action="store_false", help="Whether to use imitation learning for the task (if available)."
+    )
     # launch the simulation app
     try:
         from omni.isaac.lab.app import AppLauncher
@@ -159,7 +164,8 @@ def load_isaaclab_env(
         import isaaclab_tasks  # type: ignore
         from isaaclab_tasks.utils import parse_env_cfg  # type: ignore
 
-    cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs, use_fabric=not args.disable_fabric)
+    cfg = parse_env_cfg(args.task, use_controller = not args.do_not_control, imitation = not args.do_not_imitate,
+                        device = args.device, num_envs = args.num_envs, use_fabric = not args.disable_fabric)
 
     # print config
     if show_cfg:
