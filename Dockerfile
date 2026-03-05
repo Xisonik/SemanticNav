@@ -42,4 +42,4 @@ RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --overri
 RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r)
 RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda run ./isaaclab.sh --conda .semantic_nav)
 RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav && ./isaaclab.sh --install)
-SHELL ["/bin/bash", "-c", "source /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav && exec bash"]
+ENTRYPOINT ["source", "/root/miniconda3/etc/profile.d/conda.sh", "&&", "conda", "activate", ".semantic_nav"]
