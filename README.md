@@ -44,6 +44,13 @@ After that, installation is successful.
 docker build -f /full/path/to/target/Dockerfile -t semanticnav /full/path/to/folder/which/contains/Semanticnav_and_isaacsim
 ```
 
+8. Later, it can be run with:
+```
+docker run --name isaac-sim --entrypoint bash -it --runtime=nvidia --gpus all -e "ACCEPT_EULA=Y" --rm --network=host semanticnav
+```
+If run is not successfull, try following full guide from:
+https://docs.isaacsim.omniverse.nvidia.com/4.5.0/installation/install_container.html
+(Instead of pulling image, build image from scratch using Dockerfile)
 ## Usage examples
 Train navigation:
 ```
