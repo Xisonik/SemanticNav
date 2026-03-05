@@ -45,7 +45,7 @@ def print_orientation_accuracy(peep=False):
     global eval_gt_angles, eval_pred_angles, eval_step_counter, step
     step += 1
 
-    if step > 100 or peep:
+    if step > 3000 or peep:
         if not peep:
             step = 0
         if len(eval_gt_angles) == 0:
@@ -60,24 +60,27 @@ def print_orientation_accuracy(peep=False):
         error = torch.minimum(error, 2*torch.pi - error)
         
         # Accuracy при допустимой ошибке < 5 градусов (0.087 rad)
-       
-        print(f"\n{'='*50}")
-        print(f"EVAL COMPLETED")
-        print(f"Total steps evaluated: {len(eval_gt_angles)}")
-        print(f"Mean error: {error.mean().item()*180/torch.pi:.2f} degrees")
-        print(f"Std error: {error.std().item()*180/torch.pi:.2f} degrees")
-        print(f"Min error: {error.min().item()*180/torch.pi:.2f} degrees")
-        print(f"Max error: {error.max().item()*180/torch.pi:.2f} degrees")
+        if peep:
+            print(f"\n{'='*50}")
+            print(f"EVAL COMPLETED")
+            print(f"Total steps evaluated: {len(eval_gt_angles)}")
+            print(f"Mean error: {error.mean().item()*180/torch.pi:.2f} degrees")
+            print(f"Std error: {error.std().item()*180/torch.pi:.2f} degrees")
+            print(f"Min error: {error.min().item()*180/torch.pi:.2f} degrees")
+            print(f"Max error: {error.max().item()*180/torch.pi:.2f} degrees")
         threshold = 10.0 * torch.pi / 180.0
         accuracy_10 = (error < threshold).float().mean().item()
-        print(f"Orientation accuracy (<10°): {accuracy_10*100:.2f}%")
+        if peep:
+            print(f"Orientation accuracy (<10°): {accuracy_10*100:.2f}%")
         threshold = 20.0 * torch.pi / 180.0
         accuracy_20 = (error < threshold).float().mean().item()
-        print(f"Orientation accuracy (<20°): {accuracy_20*100:.2f}%")
+        if peep:
+            print(f"Orientation accuracy (<20°): {accuracy_20*100:.2f}%")
         threshold = 30.0 * torch.pi / 180.0
         accuracy_30 = (error < threshold).float().mean().item()
-        print(f"Orientation accuracy (<30°): {accuracy_30*100:.2f}%")
-        print(f"{'='*50}\n")
+        if peep:
+            print(f"Orientation accuracy (<30°): {accuracy_30*100:.2f}%")
+            print(f"{'='*50}\n")
         
         # Очищаем данные после вывода
         if not peep:
@@ -256,7 +259,7 @@ class OrientationModule(nn.Module):
             gt_yaw = gt_yaw.squeeze(-1)
 
         global step
-        if step > 99:    
+        if step > 2999:    
             with torch.no_grad():
                 pred_bins = probs.argmax(-1)
                 print(f"\n=== OrientationModule Debug ===")
@@ -276,7 +279,7 @@ class OrientationModule(nn.Module):
         # Cross-entropy (стабильнее Von Mises KL)
         loss = F.cross_entropy(logits, labels, label_smoothing=0.05)
         
-        if step > 99:
+        if step > 2999:
             unique_labels, counts = torch.unique(labels, return_counts=True)
             print(f"Label distribution: {dict(zip(unique_labels.cpu().numpy(), counts.cpu().numpy()))}")
         # Метрики
@@ -303,17 +306,32 @@ class OrientationModule(nn.Module):
 # =====================================================================
 class DictRunningStandardScaler(nn.Module):
     """Нормализует только img, graph и orientation оставляет как есть."""
-    def __init__(self, size, img_space, device=None, epsilon=1e-8, clip_threshold=5.0):
+    def __init__(self, size, img_space, memory_space, goal_space=None, device=None, epsilon=1e-8, clip_threshold=5.0):
         super().__init__()
         self.full_space = size
         self.img_scaler = RunningStandardScaler(
             size=img_space, epsilon=epsilon,
             clip_threshold=clip_threshold, device=device,
         )
+        self.memory_scaler = RunningStandardScaler(
+            size=memory_space, epsilon=epsilon,
+            clip_threshold=clip_threshold, device=device,
+        )
+        if goal_space is not None:
+            self.goal_scaler = RunningStandardScaler(
+                size=goal_space, epsilon=epsilon,
+                clip_threshold=clip_threshold, device=device,
+            )
+        else:
+            self.goal_scaler = None
 
     def forward(self, x, train=False, inverse=False, no_grad=True):
         s = unflatten_tensorized_space(self.full_space, x)
         s["img"] = self.img_scaler(s["img"], train=train, inverse=inverse, no_grad=no_grad)
+        s["memory"] = self.memory_scaler(s["memory"], train=train, inverse=inverse, no_grad=no_grad)
+        if self.goal_scaler is not None and "goal" in s:
+            s["goal"] = self.goal_scaler(s["goal"], train=train, inverse=inverse, no_grad=no_grad)
+
         return flatten_tensorized_space(s)
 
 
@@ -333,7 +351,8 @@ class StochasticActor(GaussianMixin, Model):
 
         img_dim = int(observation_space["img"].shape[0])
         goal_dim = int(observation_space["goal"].shape[0])
-        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + 1  # img + graph_emb + pred_angle
+        memory_dim = int(observation_space["memory"].shape[0])
+        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + 1# img + graph_emb + pred_angle
 
         self.net = nn.Sequential(
             nn.Linear(mlp_in, 512), nn.ReLU(),
@@ -346,13 +365,14 @@ class StochasticActor(GaussianMixin, Model):
         states = unflatten_tensorized_space(self.observation_space, inputs["states"])
         img = states["img"]
         goal = states["goal"]
+        memory = states["memory"]
         graph_flat = states["graph"]
         gt_orientation = states["orientation"]
         
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
+            pred_angle, _, _ = self.orient_module(memory, graph_emb)
 
             if True:
                 collect_orientation_data(gt_orientation, pred_angle)
@@ -377,7 +397,8 @@ class Critic(DeterministicMixin, Model):
 
         img_dim = int(observation_space["img"].shape[0])
         goal_dim = int(observation_space["goal"].shape[0])
-        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + 1 + self.num_actions
+        memory_dim = int(observation_space["memory"].shape[0])
+        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + self.num_actions + 1
 
         self.net = nn.Sequential(
             nn.Linear(mlp_in, 512), nn.ReLU(),
@@ -390,14 +411,15 @@ class Critic(DeterministicMixin, Model):
         img = states["img"]
         goal = states["goal"]
         graph_flat = states["graph"]
+        memory = states["memory"]
         actions = inputs["taken_actions"]
         gt_orientation = states["orientation"]
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
+            pred_angle, _, _ = self.orient_module(memory, graph_emb)
 
-        x = torch.cat([img, goal, graph_emb, gt_orientation, actions], dim=-1)
+        x = torch.cat([img, goal, graph_emb, actions, gt_orientation], dim=-1)
         return self.net(x), {}
 
 
@@ -413,7 +435,7 @@ class AuxModuleTrainer:
                  obs_space, device,
                  lr_graph=3e-4, lr_orient=1e-3,
                  batch_size=512, train_steps_per_call=2,
-                 log_interval=100):
+                 log_interval=1000):
         self.graph_encoder = graph_encoder
         self.orient_module = orient_module
         self.agent = agent
@@ -455,12 +477,13 @@ class AuxModuleTrainer:
 
             s = unflatten_tensorized_space(self.obs_space, processed)
             img = s["img"]
+            memory = s["memory"]
             graph_flat = s["graph"]
             gt_yaw = s["orientation"]
 
             # Forward (с градиентами для обоих модулей)
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, probs, logits = self.orient_module(img, graph_emb)
+            pred_angle, probs, logits = self.orient_module(memory, graph_emb)
 
             # Loss (градиенты текут и в orient, и в graph)
             loss, metrics = self.orient_module.compute_loss(logits, probs, gt_yaw)

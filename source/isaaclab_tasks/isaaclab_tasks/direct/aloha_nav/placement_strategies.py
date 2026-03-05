@@ -155,7 +155,6 @@ class OnSurfacePlacement(PlacementStrategy):
         new_xyz = torch.zeros_like(surface_pos)
         new_xyz[:, :2] = new_xy
         new_xyz[:, 2]  = new_z
-
         # Применяем
         scene_data['positions'][env_idx_tensor, obj_idx_flat] = new_xyz
         scene_data['active'][env_idx_tensor, obj_idx_flat] = True

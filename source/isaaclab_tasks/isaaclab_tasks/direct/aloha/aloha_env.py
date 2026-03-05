@@ -347,7 +347,7 @@ class WheeledRobotEnv(DirectRLEnv):
         return {
             "success_rate": self.success_rate,
             "mean_radius": self.mean_radius,
-            "max_angle_error": float(self.max_angle_error),
+            "cur_angle_error": float(self.cur_angle_error),
             "cur_angle_error": float(self.cur_angle_error),
             "episode_count": self.episode_count,
             "avg_episode_length": (

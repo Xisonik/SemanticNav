@@ -79,7 +79,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     })
     state_space = 0
     debug_vis = False
-
+ 
     ui_window_class_type = WheeledRobotEnvWindow
 
     sim: SimulationCfg = SimulationCfg(
@@ -105,7 +105,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     wheel_distance = 0.34
     tiled_camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/Robot/box2_Link/Camera",
-        offset=TiledCameraCfg.OffsetCfg(pos=(-0.35, 0, 1.1), rot=(0.99619469809,0,0.08715574274,0), convention="world"),
+        offset=TiledCameraCfg.OffsetCfg(pos=(-0.35, 0, 1.1), rot=(1.0, 0.0, 0.0, 0.0), convention="world"),
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=35.0, focus_distance=2.0, horizontal_aperture=36, clipping_range=(0.2, 10.0)
@@ -144,15 +144,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_objects = {}
         self.CAMERA = True
         self.memory_on = True
-        # self.tracker = PathTracker(num_envs=self.num_envs, device=self.device)
-        self.history_length_for_memory = 4
         super().__init__(cfg, render_mode, **kwargs)
         if self.memory_on:
             self.memory_manager = MemoryManager(
                 num_envs=self.num_envs,
                 embedding_size=512,  # Размер эмбеддинга ResNet18
                 action_size=2,      # Размер действия (линейная и угловая скорость)
-                history_length=self.history_length_for_memory,  # n = 10, можно настроить
                 device=self.device
             )
         self._super_init = False
@@ -160,8 +157,16 @@ class WheeledRobotEnv(DirectRLEnv):
         self.random_actions = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
-        self.use_controller = cfg.use_controller
-        self.imitation = cfg.imitation
+        self.CL_ON = False
+        self.stage = 3
+        self.use_staff = True
+        self.use_obstacles = True
+        self.use_controller = True
+        self.imitation = False
+        
+        self.turn_on_obstacles = False
+        self.turn_on_obstacles_always = False
+
         if self.imitation:
             self.use_controller = True
         if self.use_controller:
@@ -184,9 +189,8 @@ class WheeledRobotEnv(DirectRLEnv):
         self.turn_on_controller_step = 0
         self.my_episode_lenght = 256
         self.turn_off_controller_step = 0
-        self.use_obstacles = True
-        self.turn_on_obstacles = False
-        self.turn_on_obstacles_always = False
+        
+        
         if self.turn_on_obstacles_always:
             self.use_obstacles = True
         self.previous_distance_error = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
@@ -202,10 +206,10 @@ class WheeledRobotEnv(DirectRLEnv):
         self.mean_radius = 5
         self.max_angle_error = 1 * torch.pi
         self.cur_angle_error = 1 * torch.pi
-        self.CL_ON = True
+
 
         self.warm = True
-        self.warm_len = 5000
+        self.warm_len = 2000
         self.without_imitation = self.warm_len / 2
         self.without_imitation_log = False
         self.has_contact = torch.full((self.num_envs,), True, dtype=torch.bool, device=self.device)
@@ -245,6 +249,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.choose_speed_step = 0
         self.choosen_linear_speed = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.choosen_angular_speed = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
+
+        from .history_tracker import SceneHistoryTracker, NaNDetector
+        self.history_tracker = SceneHistoryTracker(self.num_envs, num_total_objects, 100, self.device)
+        self.nan_detector = NaNDetector(self.history_tracker, "./nan_debug", raise_on_nan=True)
+        self.setup_omni_warning_handler()
+        self.first_nan = True
 
     def print_config_info(self):
         print("__________[ CONGIFG INFO ]__________")
@@ -389,7 +399,7 @@ class WheeledRobotEnv(DirectRLEnv):
         angle = torch.acos(cos_angle)
         angle = angle
         self.memory_manager.update(image_embeddings, self.velocities)
-        embedding = self.memory_manager.get_observations(m=self.history_length_for_memory)
+        embedding = self.memory_manager.get_observations()
         robot_quat = self._robot.data.root_quat_w # [num_envs, 4]
 
         # Конвертируем quaternion → yaw
@@ -446,9 +456,14 @@ class WheeledRobotEnv(DirectRLEnv):
         nan_mask = torch.isnan(self._actions) | torch.isinf(self._actions)
         nan_indices = torch.nonzero(nan_mask.any(dim=1), as_tuple=False).squeeze()  # env_ids где любой action NaN/inf
         if nan_indices.numel() > 0:
-            print(f"[WARNING] NaN/Inf in actions for envs: {nan_indices.tolist()}. Attempting recovery...")
-            print("pos: ", self.to_local(self._robot.data.root_pos_w))
-            sys.exit()
+            if self.first_nan:
+                self.first_nan = False
+                print(f"[MY WARNING] NaN/Inf in actions for envs: {nan_indices.tolist()}")
+                print(f"pos: {self.to_local(self._robot.data.root_pos_w)[nan_indices]}")
+            
+            # ✅ ВМЕСТО exit() - заменяем на нули:
+            self._actions[nan_mask] = 0.0
+            actions[nan_mask] = 0.0
         r = self.cfg.wheel_radius
         L = self.cfg.wheel_distance
         self._step_update_counter += 1
@@ -492,7 +507,8 @@ class WheeledRobotEnv(DirectRLEnv):
             self.turn_off_controller_step += 1
             linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
-        
+        linear_speed = torch.ones_like(linear_speed) * 2
+        angular_speed = torch.zeros_like(angular_speed)
         self.angular_speed = angular_speed
         self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
         self._left_wheel_vel = (linear_speed - (angular_speed * L / 2)) / r
@@ -736,7 +752,7 @@ class WheeledRobotEnv(DirectRLEnv):
             env_ids=env_ids,
             mess=False,
             use_obstacles=self.turn_on_obstacles,
-            use_staff=True,
+            use_staff=self.use_staff,
             all_defoult=False,
         )
         self.scene_manager.get_graph_embedding(self.to_local(self._robot.data.root_pos_w), self._robot._ALL_INDICES.clone())
@@ -781,7 +797,7 @@ class WheeledRobotEnv(DirectRLEnv):
         if self.imitation:
             self.turn_on_controller = True
 
-        if (((self.turn_on_obstacles_always or self.warm or self.use_obstacles and (self.mean_radius >= 3.5 or self.mean_radius <= 1.5))) and not self.first_ep[0]): # 
+        if (((self.turn_on_obstacles_always or self.warm and (self.mean_radius >= 3.5 or self.mean_radius <= 1.5))) and not self.first_ep[0]) and self.use_obstacles: # 
             if self.turn_on_obstacles_always and self.cur_step % 300:
                 print("[ WARNING ] ostacles allways turn on")
 
@@ -794,15 +810,21 @@ class WheeledRobotEnv(DirectRLEnv):
         if len(env_ids) == self.num_envs:
             self.episode_length_buf = torch.zeros_like(self.episode_length_buf) #, high=int(self.max_episode_length))
         self._actions[env_ids] = 0.0
-        robot_pos_local, robot_quats = self.scene_manager.place_robot_for_goal(
-            config=config,
-            env_ids=env_ids,
-            mean_dist=self.mean_radius,
-            min_dist=1.2,
-            max_dist=8.0,
-            angle_error=self.cur_angle_error,
-            ev=self.EVAL
-        )
+
+        method_name = f"place_robot_for_goal_stage_{self.stage}"
+        if hasattr(self.scene_manager, method_name):
+            method = getattr(self.scene_manager, method_name)
+            robot_pos_local, robot_quats = method(
+                config=config,
+                env_ids=env_ids,
+                mean_dist=self.mean_radius,
+                min_dist=1.2,
+                max_dist=8.0,
+                angle_error=self.cur_angle_error,
+            )
+        else:
+            print("WRANG STAGE")
+        
         robot_pos  = robot_pos_local
         if self.turn_on_controller or self.imitation:
             if self.turn_on_controller_step == 0:
@@ -845,7 +867,7 @@ class WheeledRobotEnv(DirectRLEnv):
         joint_vel = self._robot.data.default_joint_vel[env_ids].clone()
         default_root_state = self._robot.data.default_root_state[env_ids].clone()
         default_root_state[:, :2] = self.to_global(robot_pos, env_ids)
-        default_root_state[:, 2] = 0.1
+        default_root_state[:, 2] = 0.2
         default_root_state[:, 3:7] = robot_quats
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
@@ -907,6 +929,7 @@ class WheeledRobotEnv(DirectRLEnv):
             self.mean_radius = self.start_mean_radius
             self.cur_angle_error = 0
             self._step_update_counter = 0
+            self.stage += 1
             print(f"end worm stage r: {round(self.mean_radius, 2)}, a: {round(self.cur_angle_error, 2)}")
         elif not self.warm and not self.turn_on_controller and self.sr_stack_full:
             if self.success_rate >= self.sr_treshhold:
@@ -941,8 +964,6 @@ class WheeledRobotEnv(DirectRLEnv):
                             self.mean_radius = 0
                         elif self.mean_radius <= 1:
                             self.mean_radius = 0.5
-                        elif self.mean_radius >= 3.5:
-                            self.mean_radius = 2.5
                         else:
                             self.mean_radius += -0.5
                         self.mean_radius = max(self.min_level_radius, self.mean_radius)
@@ -1054,3 +1075,240 @@ class WheeledRobotEnv(DirectRLEnv):
                 zero_vel = torch.zeros((env_ids.numel(), 6), device=self.device, dtype=instance_states.dtype)
                 instance.write_root_velocity_to_sim(zero_vel, env_ids=env_ids)
                 instance.write_root_pose_to_sim(instance_states[env_ids], env_ids=env_ids)
+
+    def step(self, action: torch.Tensor):
+        obs_buf, reward_buf, reset_terminated, reset_time_outs, extras = super().step(action)
+        
+        # ========== НАШЕ ОТСЛЕЖИВАНИЕ ==========
+        # Записываем историю позиций объектов
+        self.history_tracker.record_step(
+            positions=self.scene_manager.positions,
+            names=self.scene_manager.names,
+            active=self.scene_manager.active,
+            step_number=int(self.common_step_counter)
+        )
+       
+        # ========== RETURN ==========
+        return obs_buf, reward_buf, reset_terminated, reset_time_outs, extras
+
+    def setup_omni_warning_handler(self):
+        import logging
+        
+        omni_logger = logging.getLogger("omni.usd")
+        
+        class BreakpointWarningHandler(logging.Handler):
+            def __init__(self, env):
+                super().__init__()
+                self.env = env
+                self.count = 0
+            
+            def emit(self, record):
+                if "OrthogonalizeBasis did not converge" in record.getMessage():
+                    self.count += 1
+                    print(f"\n[ORTHONORMALIZE WARNING #{self.count}]")
+                    print(f"Step: {self.env.common_step_counter}")
+                    
+                    # ✅ ОСТАНОВИТЬ В ДЕБАГЕ
+                    import pdb
+                    pdb.set_trace()
+        
+        handler = BreakpointWarningHandler(self)
+        omni_logger.addHandler(handler)
+        omni_logger.setLevel(logging.WARNING)
+
+
+# ============================================================================
+# ПРОВЕРКА ФАКТИЧЕСКИХ ПОЗИЦИЙ ОБЪЕКТОВ В СИМУЛЯТОРЕ
+# ============================================================================
+
+def verify_object_positions(self, env_ids: torch.Tensor = None, verbose: bool = True) -> bool:
+    """
+    Проверяет, совпадают ли позиции объектов в scene_manager 
+    с реальными позициями в симуляторе.
+    
+    Args:
+        env_ids: какие окружения проверить (если None - все)
+        verbose: печатать ли отладку
+    
+    Returns:
+        True если все совпадает, False если есть рассинхронизация
+    """
+    if env_ids is None:
+        env_ids = self._robot._ALL_INDICES.clone()
+    
+    all_match = True
+    max_errors = []
+    
+    for name, object_instances in self.scene_objects.items():
+        if name not in self.scene_manager.object_map:
+            continue
+        
+        indices = self.scene_manager.object_map[name]['indices']
+        
+        for i, instance in enumerate(object_instances):
+            # Получаем ФАКТИЧЕСКИЕ позиции из симулятора
+            actual_root_state = instance.data.root_state  # [num_envs, 13]
+            actual_pos_w = actual_root_state[env_ids, :3]  # [len(env_ids), 3]
+            
+            # Получаем ОЖИДАЕМЫЕ позиции из scene_manager
+            scene_pos_local = self.scene_manager.positions[env_ids, indices[i], :3]  # [len(env_ids), 3]
+            
+            # Конвертируем в глобальные для сравнения
+            env_origins = self._terrain.env_origins[env_ids]  # [len(env_ids), 3]
+            expected_pos_w = scene_pos_local + env_origins
+            
+            # Вычисляем разницу
+            pos_error = torch.norm(actual_pos_w - expected_pos_w, dim=1)  # [len(env_ids)]
+            max_error = pos_error.max().item()
+            mean_error = pos_error.mean().item()
+            
+            max_errors.append((name, i, max_error, mean_error))
+            
+            # Проверяем, не превышена ли допустимая разница (10 см)
+            threshold = 0.1  # 10 см
+            if max_error > threshold:
+                all_match = False
+                if verbose:
+                    print(f"[MISMATCH] {name}_{i}: max_error={max_error:.4f}m, mean_error={mean_error:.4f}m")
+                    mismatched_envs = torch.where(pos_error > threshold)[0]
+                    for env_idx in mismatched_envs[:3]:  # показать первые 3
+                        actual = actual_pos_w[env_idx]
+                        expected = expected_pos_w[env_idx]
+                        print(f"  Env {env_ids[env_idx].item()}: actual={actual.tolist()}, "
+                              f"expected={expected.tolist()}, error={pos_error[env_idx]:.4f}m")
+    
+    if verbose:
+        if all_match:
+            print("\n✓ ВСЕ ПОЗИЦИИ СОВПАДАЮТ!\n")
+        else:
+            print(f"\n✗ НАЙДЕНА РАССИНХРОНИЗАЦИЯ! Максимальные ошибки:\n")
+            for name, idx, max_err, mean_err in sorted(max_errors, key=lambda x: x[2], reverse=True):
+                status = "✓ OK" if max_err < 0.1 else "✗ ERROR"
+                print(f"  {status} {name}_{idx}: max={max_err:.4f}m, mean={mean_err:.4f}m")
+            print()
+    
+    return all_match
+
+
+def check_object_positions_detailed(self, env_id: int = 0):
+    """
+    Детальная проверка позиций объектов для одного окружения.
+    
+    Args:
+        env_id: ID окружения для проверки
+    """
+    print(f"\n{'='*80}")
+    print(f"DETAILED POSITION CHECK - Environment {env_id}")
+    print(f"{'='*80}\n")
+    
+    print(f"{'Object':<20} | {'Actual Pos (X,Y,Z)':<40} | {'Expected Pos':<40} | Error")
+    print("-" * 150)
+    
+    for name, object_instances in self.scene_objects.items():
+        if name not in self.scene_manager.object_map:
+            continue
+        
+        indices = self.scene_manager.object_map[name]['indices']
+        
+        for i, instance in enumerate(object_instances):
+            # Фактическая позиция
+            actual_pos_w = instance.data.root_state[env_id, :3]
+            
+            # Ожидаемая позиция
+            scene_pos_local = self.scene_manager.positions[env_id, indices[i], :3]
+            env_origin = self._terrain.env_origins[env_id]
+            expected_pos_w = scene_pos_local + env_origin
+            
+            # Ошибка
+            error = torch.norm(actual_pos_w - expected_pos_w).item()
+            
+            actual_str = f"({actual_pos_w[0]:.3f}, {actual_pos_w[1]:.3f}, {actual_pos_w[2]:.3f})"
+            expected_str = f"({expected_pos_w[0]:.3f}, {expected_pos_w[1]:.3f}, {expected_pos_w[2]:.3f})"
+            status = "✓" if error < 0.1 else "✗"
+            
+            print(f"{name}_{i:<18} | {actual_str:<40} | {expected_str:<40} | {error:.4f}m {status}")
+
+
+def print_scene_state_snapshot(self, env_id: int = 0):
+    """
+    Полный снимок состояния сцены для одного окружения.
+    """
+    print(f"\n{'='*80}")
+    print(f"SCENE STATE SNAPSHOT - Environment {env_id}")
+    print(f"{'='*80}\n")
+    
+    # Позиция робота
+    robot_pos_w = self._robot.data.root_pos_w[env_id]
+    robot_pos_local = self.to_local(robot_pos_w.unsqueeze(0))[0]
+    print(f"Robot Position:")
+    print(f"  Global: ({robot_pos_w[0]:.3f}, {robot_pos_w[1]:.3f}, {robot_pos_w[2]:.3f})")
+    print(f"  Local:  ({robot_pos_local[0]:.3f}, {robot_pos_local[1]:.3f})")
+    
+    # Позиция цели
+    goal_pos_w = self._desired_pos_w[env_id]
+    goal_pos_local = self.to_local(goal_pos_w.unsqueeze(0))[0]
+    distance = torch.norm(robot_pos_w[:2] - goal_pos_w[:2]).item()
+    print(f"\nGoal Position:")
+    print(f"  Global: ({goal_pos_w[0]:.3f}, {goal_pos_w[1]:.3f}, {goal_pos_w[2]:.3f})")
+    print(f"  Local:  ({goal_pos_local[0]:.3f}, {goal_pos_local[1]:.3f})")
+    print(f"  Distance: {distance:.3f}m")
+    
+    # Активные объекты
+    print(f"\nActive Objects:")
+    active_count = 0
+    for name, object_instances in self.scene_objects.items():
+        if name not in self.scene_manager.object_map:
+            continue
+        
+        indices = self.scene_manager.object_map[name]['indices']
+        
+        for i, instance in enumerate(object_instances):
+            is_active = self.scene_manager.active[env_id, indices[i]].item()
+            if is_active:
+                active_count += 1
+                pos_w = instance.data.root_state[env_id, :3]
+                pos_local = self.to_local(pos_w.unsqueeze(0))[0]
+                print(f"  {name}_{i}: ({pos_local[0]:.2f}, {pos_local[1]:.2f})")
+    
+    print(f"\nTotal active objects: {active_count}/{self.scene_manager.num_total_objects}")
+    
+    # Столкновения
+    force_matrix = self.scene["contact_sensor"].data.net_forces_w
+    if force_matrix is not None and force_matrix.numel() > 0:
+        contact_forces = torch.norm(force_matrix, dim=-1)
+        num_contacts = (contact_forces[env_id] > 0.05).sum().item()
+        print(f"\nContact forces: {num_contacts} active contacts")
+    else:
+        print(f"\nContact forces: No contact data")
+    
+    # История в tracker
+    if hasattr(self, 'history_tracker'):
+        print(f"\nHistory tracker:")
+        print(f"  Steps tracked: {self.history_tracker.current_step}")
+        print(f"  Max history: {self.history_tracker.max_history}")
+
+
+def validate_positions_in_step(self, action: torch.Tensor):
+    """
+    Версия step() с встроенной проверкой позиций (для отладки).
+    """
+    obs_buf, reward_buf, reset_terminated, reset_time_outs, extras = super().step(action)
+    
+    # Записываем историю
+    self.history_tracker.record_step(
+        positions=self.scene_manager.positions,
+        names=self.scene_manager.names,
+        active=self.scene_manager.active,
+        step_number=int(self.common_step_counter)
+    )
+    
+    # ПРОВЕРКА: каждые 100 шагов
+    if self.common_step_counter % 100 == 0:
+        all_match = self.verify_object_positions(verbose=False)
+        if not all_match:
+            print(f"\n[WARNING] Position mismatch at step {self.common_step_counter}")
+            self.verify_object_positions(verbose=True)
+            # Можно добавить pdb.set_trace() для остановки
+    
+    return obs_buf, reward_buf, reset_terminated, reset_time_outs, extras
+

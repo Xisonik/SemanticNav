@@ -611,7 +611,7 @@ class SceneManager:
             picked = elig_avail[perm]
             return picked.view(1, -1)
 
-        def _apply_strategy_one_env(p_type: str, env_id: int, env_ids: torch.Tensor, obj_idx_row: torch.Tensor, config):
+        def _apply_strategy_one_env(p_type: str, env_id: int, env_ids: torch.Tensor, obj_idx_row: torch.Tensor, config, mess=False):
             # print(f"[DEBUG STRATEGY] Applying {p_type} for env_id={env_id}")
             # print(f"[DEBUG STRATEGY] obj_idx_row: {obj_idx_row}")
             if obj_idx_row.numel() == 0:
@@ -641,8 +641,11 @@ class SceneManager:
                 k_surface_only = 0
 
             k_movable = int(torch.randint(0, 4, (1,), device=device).item()) if (use_obstacles and max_mov > 0) else 0
-            k_staff   = 14 #int(torch.randint(int(max_mov/2) if max_mov>0 else 0, max_staff + 1, (1,), device=device).item()) if (use_staff and max_staff > 0) else 0
-            
+            if use_staff:
+                k_staff   = 14 #int(torch.randint(int(max_mov/2) if max_mov>0 else 0, max_staff + 1, (1,), device=device).item()) if (use_staff and max_staff > 0) else 0
+            else:
+                k_staff = 0
+
             for p_type in placement_order:
                 if p_type == "surface_provider":
                     elig = idx_by_type["surface_provider"]
@@ -658,7 +661,7 @@ class SceneManager:
                 elif p_type == "surface_only":
                     elig = idx_by_type["surface_only"]
                     picked = _sample_available_for_env(env_id, elig, k_surface_only)
-                    _apply_strategy_one_env("surface_only", env_id, env_ids, picked, config)
+                    _apply_strategy_one_env("surface_only", env_id, env_ids, picked, config, True)
                 elif p_type == "staff_obstacle":
                     elig = idx_by_type["staff_obstacle"]
                     picked = _sample_available_for_env(env_id, elig, k_staff)
@@ -884,9 +887,49 @@ class SceneManager:
 
     def get_active_goal_state(self, env_ids: torch.Tensor):
         return self.goal_positions[env_ids]
-
+    
+    def place_robot_for_goal_stage_3(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
+        num_envs = len(env_ids)
+        goal_pos = self.goal_positions[env_ids]
+               
+        # Случайное размещение робота в пределах комнаты
+        range = 6
+        random_x = (torch.rand(num_envs, device=self.device)-0.5) *range
+        random_y = (torch.rand(num_envs, device=self.device)-0.5) *range
+        
+        final_robot_positions = torch.stack([random_x, random_y], dim=1)
+        
+        # Ориентация робота направлена от центра комнаты
+        # Центр комнаты находится в (0, 0)
+        direction_from_center = final_robot_positions  # вектор от центра к позиции робота
+        final_yaw = torch.atan2(direction_from_center[:, 1], direction_from_center[:, 0])
+        
+        # Создание кватернионов для ориентации
+        robot_quats = torch.zeros(num_envs, 4, device=self.device)
+        robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
+        robot_quats[:, 3] = torch.sin(final_yaw / 2.0)
+        
+        # Удаление препятствий, которые пересекаются с роботом
+        self.remove_colliding_obstacles(env_ids, final_robot_positions)
+        
+        return final_robot_positions, robot_quats
+ 
     # ----------- Размещение робота -----------
-    def place_robot_for_goal(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float, ev=False):
+    def place_robot_for_goal_stage_2(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
+        num_envs = len(env_ids)
+
+        final_robot_positions = torch.zeros((num_envs, 2), device=self.device)
+        final_yaw = (torch.rand(num_envs, device=self.device) * 2 * torch.pi) - torch.pi
+        
+        robot_quats = torch.zeros(num_envs, 4, device=self.device)
+        robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
+        robot_quats[:, 3] = torch.sin(final_yaw / 2.0)
+
+        # print(env_ids, final_robot_positions)
+        self.remove_colliding_obstacles(env_ids, final_robot_positions)
+        return final_robot_positions, robot_quats
+    
+    def place_robot_for_goal_stage_1(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
         num_envs = len(env_ids)
         goal_pos = self.goal_positions[env_ids]
         # print("goal: ", goal_pos)
@@ -928,10 +971,6 @@ class SceneManager:
         final_yaw = base_yaw + error #+ torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
         # print(final_yaw)
         # final_yaw = torch.full_like(base_yaw + error, math.pi / 2, device=self.device)
-        
-        if mean_dist >= 5 or ev:
-            final_robot_positions = torch.zeros_like(final_robot_positions, device=self.device)
-            final_yaw = (torch.rand_like(final_yaw) * 2 * torch.pi) - torch.pi
             
         robot_quats = torch.zeros(num_envs, 4, device=self.device)
         robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
@@ -939,6 +978,32 @@ class SceneManager:
 
         # print(env_ids, final_robot_positions)
         self.remove_colliding_obstacles(env_ids, final_robot_positions)
+        return final_robot_positions, robot_quats
+
+    def place_robot_for_goal_stage_0(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
+        num_envs = len(env_ids)
+        goal_pos = self.goal_positions[env_ids]
+               
+        # Случайное размещение робота в пределах комнаты
+        range = 6
+        random_x = (torch.rand(num_envs, device=self.device)-0.5) *range
+        random_y = (torch.rand(num_envs, device=self.device)-0.5) *range
+        
+        final_robot_positions = torch.stack([random_x, random_y], dim=1)
+        # Случайная ориентация робота
+        direction_to_goal = goal_pos[:, :2] - final_robot_positions
+        base_yaw = torch.atan2(direction_to_goal[:, 1], direction_to_goal[:, 0])
+        error = (torch.rand(num_envs, device=self.device) - 0.5) * 2 * angle_error
+        final_yaw = torch.rand(num_envs, device=self.device) * 2 * math.pi
+        
+        # Создание кватернионов для ориентации
+        robot_quats = torch.zeros(num_envs, 4, device=self.device)
+        robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
+        robot_quats[:, 3] = torch.sin(final_yaw / 2.0)
+        
+        # Удаление препятствий, которые пересекаются с роботом
+        self.remove_colliding_obstacles(env_ids, final_robot_positions)
+        
         return final_robot_positions, robot_quats
 
     def remove_colliding_obstacles(self, env_ids: torch.Tensor, robot_positions: torch.Tensor):
