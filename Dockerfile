@@ -11,12 +11,12 @@ RUN apt install -y build-essential cmake git libssl-dev libfreetype6-dev zlib1g-
 RUN mkdir -p /root/miniconda3
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /root/miniconda3/miniconda.sh
 RUN bash /root/miniconda3/miniconda.sh -b -u -p /root/miniconda3
-RUN rm /root/miniconda3/miniconda.sh
+RUN rm -f /root/miniconda3/miniconda.sh
 
 ADD isaacsim /root/isaacsim
 
 ADD SemanticNav /root/SemanticNav
-RUN rm /root/SemanticNav/_isaac_sim
+RUN rm -f /root/SemanticNav/_isaac_sim
 RUN ln -s /root/isaacsim /root/SemanticNav/_isaac_sim
 
 RUN pip install gdown
