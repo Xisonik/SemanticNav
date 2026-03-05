@@ -39,6 +39,10 @@ Asset directories should look like this by the path IsaacLab/source/isaaclab_ass
 5. Put "text_embeddings.pt" to "IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/"
 6. Replace the "skrl" folder on the "miniconda3/envs/env_isaaclab/lib/python3.10/site-packages/skrl" path with a folder from IsaacLab
 After that, installation is successful.
+7. If you want additionally to build a docker image, run:
+```
+docker build -f /full/path/to/target/Dockerfile -t semanticnav /full/path/to/folder/which/contains/Semanticnav_and_isaacsim
+```
 
 ## Usage examples
 Train navigation:
