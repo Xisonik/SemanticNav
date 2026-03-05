@@ -138,10 +138,10 @@ def load_isaaclab_env(
         "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
     )
     parser.add_argument(
-        "--do_not_control", action="store_false", help="Whether to use the controller for the task (if available)."
+        "--controller", action=argparse.BooleanOptionalAction, default=True, help="Whether to use the controller for the task (if available)."
     )
     parser.add_argument(
-        "--do_not_imitate", action="store_false", help="Whether to use imitation learning for the task (if available)."
+        "--imitation", action=argparse.BooleanOptionalAction, default=False, help="Whether to use imitation learning for the task (if available)."
     )
     # launch the simulation app
     try:
@@ -164,7 +164,7 @@ def load_isaaclab_env(
         import isaaclab_tasks  # type: ignore
         from isaaclab_tasks.utils import parse_env_cfg  # type: ignore
 
-    cfg = parse_env_cfg(args.task, use_controller = not args.do_not_control, imitation = not args.do_not_imitate,
+    cfg = parse_env_cfg(args.task, controller = args.controller, imitation = args.imitation,
                         device = args.device, num_envs = args.num_envs, use_fabric = not args.disable_fabric)
 
     # print config

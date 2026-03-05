@@ -1,0 +1,44 @@
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
+SHELL ["/bin/bash", "-c"]
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && \
+      apt-get -y install sudo python3 python3-pip curl git
+RUN apt install -y build-essential cmake git libssl-dev zlib1g-dev \
+	libbz2-dev libreadline-dev libsqlite3-dev libglib2.0-0 curl git \
+	libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev ncurses-term \
+	libffi-dev liblzma-dev libosmesa6-dev patchelf wget unzip
+RUN mkdir -p /root/miniconda3
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /root/miniconda3/miniconda.sh
+RUN bash /root/miniconda3/miniconda.sh -b -u -p /root/miniconda3
+RUN rm /root/miniconda3/miniconda.sh
+
+ADD isaacsim /root/isaacsim
+
+ADD SemanticNav /root/SemanticNav
+RUN rm /root/SemanticNav/_isaac_sim
+RUN ln -s /root/isaacsim /root/SemanticNav/_isaac_sim
+
+RUN pip install gdown
+RUN mkdir /root/tmp
+WORKDIR /root/tmp
+RUN gdown --folder https://drive.google.com/drive/folders/1sdWFHsREqW_2fmu2E2mjV8LxF6KUYaSe?usp=sharing -O /root/tmp
+RUN rm -rf /root/SemanticNav/source/isaaclab_assets/data/
+RUN mkdir -p /root/SemanticNav/source/isaaclab_assets/data/
+RUN unzip aloha_assets.zip -d /root/SemanticNav/source/isaaclab_assets/data/
+RUN rm -rf /root/SemanticNav/data/all_paths.json
+RUN mv all_paths.json /root/SemanticNav/data/
+RUN rm -rf /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/text_embeddings.pt
+RUN mv text_embeddings.pt /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/
+WORKDIR /root
+RUN rm -rf /root/tmp
+
+ENV ISAACSIM_PATH="/root/isaacsim"
+ENV ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
+WORKDIR /root/SemanticNav
+RUN rm -f /root/SemanticNav/_isaac_sim
+RUN ln -s ${ISAACSIM_PATH} _isaac_sim
+RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main)
+RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r)
+RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda run ./isaaclab.sh --conda .semantic_nav)
+RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav && ./isaaclab.sh --install)
+SHELL ["/bin/bash", "-c", "source /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav && exec bash"]

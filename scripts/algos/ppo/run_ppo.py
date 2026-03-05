@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
 from scripts.algos.ppo.networks import Policy, Value, GraphEncoder
-from scripts.algos.networks.networks import DictRunningStandardScaler
+from scripts.algos.networks.networks_gt import DictRunningStandardScaler
 from skrl.envs.loaders.torch import load_isaaclab_env
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.memories.torch import RandomMemory

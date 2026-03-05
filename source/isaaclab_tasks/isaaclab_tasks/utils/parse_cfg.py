@@ -115,7 +115,7 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
 
 
 def parse_env_cfg(
-    task_name: str, use_controller: bool, imitation: bool, 
+    task_name: str, controller: bool, imitation: bool, 
     device: str = "cuda:0", num_envs: int | None = None, use_fabric: bool | None = None,
 ) -> ManagerBasedRLEnvCfg | DirectRLEnvCfg:
     """Parse configuration for an environment and override based on inputs.
@@ -145,7 +145,7 @@ def parse_env_cfg(
 
     # simulation device
     cfg.sim.device = device
-    cfg.use_controller = use_controller
+    cfg.controller = controller
     cfg.imitation = imitation
     # disable fabric to read/write through USD
     if use_fabric is not None:

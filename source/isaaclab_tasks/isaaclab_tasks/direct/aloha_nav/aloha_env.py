@@ -161,8 +161,8 @@ class WheeledRobotEnv(DirectRLEnv):
         self.stage = 3
         self.use_staff = True
         self.use_obstacles = True
-        self.use_controller = True
-        self.imitation = False
+        self.use_controller = cfg.controller
+        self.imitation = cfg.imitation
         
         self.turn_on_obstacles = False
         self.turn_on_obstacles_always = False
