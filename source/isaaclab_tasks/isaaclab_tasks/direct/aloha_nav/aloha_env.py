@@ -127,7 +127,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     )
     contact_sensor = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",
-        update_period=0.1,
+        update_period=0.05,
         history_length=3,
         debug_vis=False,
         filter_prim_paths_expr=["/World/envs/env_.*"], #/obstacles/.*
@@ -158,7 +158,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
         self.CL_ON = False
-        self.stage = 3
+        self.stage = 0
         self.use_staff = True
         self.use_obstacles = True
         self.use_controller = True
@@ -212,7 +212,6 @@ class WheeledRobotEnv(DirectRLEnv):
         self.warm_len = 2000
         self.without_imitation = self.warm_len / 2
         self.without_imitation_log = False
-        self.has_contact = torch.full((self.num_envs,), True, dtype=torch.bool, device=self.device)
         self.success_ep_num = 0
         self.first_ep = [True, True] # TODO: to dictionaty
 
@@ -375,7 +374,13 @@ class WheeledRobotEnv(DirectRLEnv):
         angle = self._robot.data.root_quat_w
 
         root_quat_w = self._robot.data.root_quat_w  # shape [N, 4]
+        base_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=root_quat_w.device)
 
+        # mask = torch.isnan(root_quat_w).any(dim=-1)
+        # root_quat_w[mask] = base_quat
+
+        if torch.isnan(root_quat_w).any():
+            print("Oh Nooooooo")
         # Локальный вектор взгляда робота (вперёд по оси X)
         local_forward = torch.tensor([1.0, 0.0, 0.0], device=root_quat_w.device, dtype=root_quat_w.dtype)
         local_forward = local_forward.unsqueeze(0).repeat(root_quat_w.shape[0], 1)  # [N, 3]
@@ -401,7 +406,11 @@ class WheeledRobotEnv(DirectRLEnv):
         self.memory_manager.update(image_embeddings, self.velocities)
         embedding = self.memory_manager.get_observations()
         robot_quat = self._robot.data.root_quat_w # [num_envs, 4]
-
+        mask = torch.isnan(robot_quat).any(dim=-1)
+        robot_quat[mask] = base_quat
+        
+        if torch.isnan(robot_quat).any():
+            print("Oh Nooooooo robot_quat")
         # Конвертируем quaternion → yaw
         # ВНИМАНИЕ: Isaac Lab использует (w,x,y,z) или (x,y,z,w) - ПРОВЕРЬТЕ!
         w, x, y, z = robot_quat[:, 0], robot_quat[:, 1], robot_quat[:, 2], robot_quat[:, 3]
@@ -414,7 +423,19 @@ class WheeledRobotEnv(DirectRLEnv):
         # Знаковый угол [-π, π]
         root_quat_w = self._robot.data.root_quat_w  # [N, 4]
         root_pos_w = self._robot.data.root_pos_w    # [N, 3]
+        mask = torch.isnan(root_quat_w).any(dim=-1)
+        root_quat_w[mask] = base_quat
+        
+        if torch.isnan(root_quat_w).any():
+            print("Oh Nooooooo root_quat_w")
 
+        base_pos = torch.tensor([0.0, 0.0, 0.0], device=root_pos_w.device)
+
+        mask = torch.isnan(root_pos_w).any(dim=-1)
+        root_pos_w[mask] = base_pos
+
+        if torch.isnan(root_pos_w).any():
+            print("Oh Nooooooo root_pos_w")
         # 1. Вектор от робота к цели в мировых координатах
         to_goal_world = self._desired_pos_w - root_pos_w  # [N, 3]
 
@@ -507,8 +528,8 @@ class WheeledRobotEnv(DirectRLEnv):
             self.turn_off_controller_step += 1
             linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
-        linear_speed = torch.ones_like(linear_speed) * 2
-        angular_speed = torch.zeros_like(angular_speed)
+        # linear_speed = torch.zeros_like(linear_speed)
+        # angular_speed = torch.ones_like(angular_speed)
         self.angular_speed = angular_speed
         self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
         self._left_wheel_vel = (linear_speed - (angular_speed * L / 2)) / r
@@ -518,6 +539,7 @@ class WheeledRobotEnv(DirectRLEnv):
         wheel_velocities = torch.stack([self._left_wheel_vel, self._right_wheel_vel], dim=1).unsqueeze(-1).to(dtype=torch.float32)
         self.last_actions = wheel_velocities
         self._robot.set_joint_velocity_target(wheel_velocities, joint_ids=[self._left_wheel_id, self._right_wheel_id])
+
 
     def _get_rewards(self) -> torch.Tensor:
         goal_reached, num_subs, r_error, a_error = self.goal_reached(get_num_subs=True)
@@ -626,7 +648,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # вычисляем модуль силы для каждого контакта
         if force_matrix is not None and force_matrix.numel() > 0:
             contact_forces = torch.norm(force_matrix, dim=-1)
-            num_contacts_per_env = torch.sum(contact_forces > 0.05, dim=1)
+            num_contacts_per_env = torch.sum(contact_forces > 0.02, dim=1)
             high_contact_envs = num_contacts_per_env >= 1
         else:
             print("force_matrix_w is None or empty")
@@ -679,26 +701,16 @@ class WheeledRobotEnv(DirectRLEnv):
         return self.success_rate
     
     def out_of_bounds(self):
-        root_pos_w = self._robot.data.root_pos_w[:, :2]
-        root_quat_w = self._robot.data.root_quat_w  # shape [N, 4]
-        local_forward = torch.tensor([1.0, 0.0, 0.0], device=root_quat_w.device, dtype=root_quat_w.dtype)
-        local_forward = local_forward.unsqueeze(0).repeat(root_quat_w.shape[0], 1)  # [N, 3]
+        poses = self.to_local(self._robot.data.root_pos_w)
+        x, y = poses[..., 0], poses[..., 1]
 
-        forward_w = self.quat_rotate(root_quat_w, local_forward)  # [N, 3]
-        root_pos_w = self._robot.data.root_pos_w  # [N, 3]
-        to_goal = self._desired_pos_w - root_pos_w  # [N, 3]
+        xmin = self.scene_manager.room_bounds['x_min'] + 1.5
+        xmax = self.scene_manager.room_bounds['x_max'] - 1.5
+        ymin = self.scene_manager.room_bounds['y_min'] + 1.5
+        ymax = self.scene_manager.room_bounds['y_max'] - 1.5
 
-        forward_w_norm = torch.nn.functional.normalize(forward_w[:, :2] , dim=1)
-        to_goal_norm = torch.nn.functional.normalize(to_goal[:, :2] , dim=1)
-
-        cos_angle = torch.sum(forward_w_norm * to_goal_norm, dim=1)
-        cos_angle = torch.clamp(cos_angle, -1.0, 1.0)  # для безопасности
-
-        angle = torch.acos(cos_angle)
-        angle_degrees = torch.abs(angle) * 180.0 / 3.14
-        out = angle_degrees > 120
-
-        return out
+        in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+        return ~in_bounds
     
     def update_sr_stack(self):
         self.success_stacks = [[] for _ in range(self.num_envs)]  # Список списков для каждой среды
@@ -710,14 +722,8 @@ class WheeledRobotEnv(DirectRLEnv):
         """
         time_out = self.is_time_out(my_episode_lenght)
         
-        has_contact = self.get_contact()
-        self.has_contact = has_contact
-        died = torch.logical_or(
-            torch.logical_or(
-                self.goal_reached(),
-                has_contact),
-            time_out,
-        )                
+        died = self.goal_reached() | self.get_contact() | self.out_of_bounds() | time_out
+
         if not inner:
             self.episode_length_buf[died] = 0
         return died, time_out

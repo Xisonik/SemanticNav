@@ -1,0 +1,98 @@
+{
+  "objects": [
+    {
+      "name": "table_2",
+      "info": {
+          "color": "green",
+          "add_info": [],
+          "position": []
+        },
+      "type": ["static_obstacle", "surface_provider", "changeable_color"],
+      "count": 2,
+      "size": [0.35, 0.35, 0.8],
+      "usd_paths": ["scenes/scenes_sber_kitchen_for_BBQ/table/table_2.usd"]
+    },
+    {
+      "name": "box",
+      "info": {
+          "color": "yellow",
+          "add_info": [],
+          "position": []
+        },
+      "type": ["staff_obstacle"],
+      "count": 12,
+      "size": [0.4, 0.4, 0.9],
+      "usd_paths": ["scenes/obstacles/box.usd"]
+    },
+    {
+      "name": "chair_2",
+      "info": {
+          "color": "orange",
+          "add_info": [],
+          "position": []
+        },
+      "type": ["staff_obstacle"],
+      "count": 2,
+      "size": [0.35, 0.35, 0.9],
+      "usd_paths": ["scenes/obstacles/chair2.usd"]
+    },
+    {
+      "name": "chair_3",
+      "info": {
+          "color": "red",
+          "add_info": [],
+          "position": []
+        },
+      "type": ["movable_obstacle"],
+      "count": 4,
+      "size": [0.35, 0.35, 0.9],
+      "usd_paths": ["scenes/obstacles/chair3.usd"]
+    },
+    {
+      "name": "teddy",
+      "info": {
+          "color": "yellow",
+          "add_info": [],
+          "position": []
+        },
+      "type": ["possible_goal", "surface_only"],
+      "count": 1,
+      "size": [0.15, 0.15, 0.05],
+      "usd_paths": ["scenes/obstacles/teddy.usd"]
+    }
+  ],
+  "type_placements": {
+    "surface_provider": {
+      "strategy": "grid",
+      "grid_coordinates": [
+        [4, 0, 0.0], [-4, 0, 0.0]
+      ]
+    },
+    "goal_possible_positions": {
+      "strategy": "on_surface",
+      "margin": 0.5
+    },
+    "movable_obstacle": {
+      "strategy": "grid",
+      "grid_coordinates": [
+        [1.5, -0.5, 0.0], [-1.5, -0.5, 0.0],
+        [1.5, 0.5, 0.0], [-1.5, 0.5, 0.0]
+      ]
+    },
+    "staff_obstacle": {
+      "strategy": "grid",
+      "grid_coordinates": [
+        [-2, 4, 0.0], [0, 4, 0.0], [2, 4, 0.0], 
+        [-2, -4, 0.0], [0, -4, 0.0], [2, -4, 0.0], 
+        [4, 4, 0.0], [-4, 4, 0.0], [4, -4, 0.0], [-4, -4, 0.0],
+        [4, 2, 0.0], [-4, 2, 0.0],
+        [4, -2, 0.0], [-4, -2, 0.0]
+      ]
+    },
+    "surface_only": {
+      "strategy": "on_surface",
+      "surface_types": ["surface_provider"],
+      "margin": 0.0
+    }
+  }
+}

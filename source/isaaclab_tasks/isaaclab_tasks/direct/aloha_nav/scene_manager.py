@@ -405,7 +405,7 @@ class SceneManager:
         self.placement_strategies = self._initialize_strategies()
 
         self.robot_radius = 0.5
-        self.room_bounds = {'x_min': -4, 'x_max': 4, 'y_min': -4, 'y_max': 4}
+        self.room_bounds = {'x_min': -5, 'x_max': 5, 'y_min': -5, 'y_max': 5}
         self.goal_positions = torch.zeros((num_envs, 3), device=self.device)
 
         # Индекс активной цели на каждую сцену (E,), плюс индекс робота (если есть)

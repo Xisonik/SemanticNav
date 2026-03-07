@@ -33,11 +33,11 @@ LIVESTREAM = False
 USE_PRETRAINED = False
 
 num_envs = 128
-timestepslen = 100000
-headless = False
+timestepslen = 10000000
+headless = True
 
 if EVAL or VIDEO:
-    timestepslen = 800
+    timestepslen = 300
 
 if VIDEO:
     cli_args = ["--enable_cameras", "--video", "--livestream", "2"]
@@ -52,7 +52,7 @@ else:
     cli_args = ["--enable_cameras"]
 
 if headless == False:
-    num_envs = 64
+    num_envs = 1
 
 if headless:
     env = load_isaaclab_env(
@@ -97,7 +97,7 @@ elif num_envs == 64:
     memory_size = 2000
 elif num_envs == 32:
     memory_size = 5000
-memory_size = 100
+
 print("memory size: ", memory_size)
 memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
@@ -195,7 +195,7 @@ def _post_with_aux(timestep, timesteps):
         torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
     # if timestep % 2000 == 0:
     #     memory.save(directory="logs/skrl/memory")
-    if timestep % 2000 == 0:
+    if timestep % 50 == 0:
         metrics = env.unwrapped.get_metrics()
         if timestep % 2000 == 0:
             print(metrics)
