@@ -49,6 +49,10 @@ def import_class_from_path(module_path, class_name):
     return class_obj
 
 module_path = "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/placement_strategies.py"
+graph_builder_module_path = "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/graph_builder.py"
+vl_sat_predictor_module_path = "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/vl_sat_model/predictor_service.py"
+SceneGraphBuilder = import_class_from_path(graph_builder_module_path, "SceneGraphBuilder")
+VLSATEdgePredictorService = import_class_from_path(vl_sat_predictor_module_path, "VLSATEdgePredictorService")
 PlacementStrategy = import_class_from_path(module_path, "PlacementStrategy")
 GridPlacement = import_class_from_path(module_path, "GridPlacement")
 GridPlacementWithOrientation = import_class_from_path(module_path, "GridPlacementWithOrientation")
@@ -111,11 +115,96 @@ class SceneGraph:
     """Вся графовая логика: наблюдения, отношения, промпты."""
     def __init__(self, manager: 'SceneManager'):
         self.m = manager
+        self.builder = manager.graph_builder
         self._dirty = True  # если нужна инвалидация кэшей в будущем
 
     def refresh(self):
         """Вызывается менеджером после изменений сцены. Сейчас ничего не кэшируем, но оставляем хук."""
         self._dirty = True
+
+    @torch.no_grad()
+    def _build_parent_edge_features(
+        self,
+        positions: torch.Tensor,
+        levels: torch.Tensor,
+        colors: torch.Tensor,
+        object_ids: torch.Tensor,
+        raw_parents: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.builder.build_parent_edge_features(positions, levels, colors, object_ids, raw_parents)
+
+    @staticmethod
+    @torch.no_grad()
+    def _safe_normalize(v: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        return SceneGraphBuilder.safe_normalize(v, eps=eps)
+
+    @torch.no_grad()
+    def _bbq_relative_components(
+        self,
+        target_pos: torch.Tensor,
+        anchor_pos: torch.Tensor,
+        center_point: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.builder.bbq_relative_components(target_pos, anchor_pos, center_point)
+
+    @torch.no_grad()
+    def _build_bbq_edge_features(
+        self,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        object_ids: torch.Tensor,
+        active: torch.Tensor,
+    ) -> torch.Tensor:
+        m = self.m
+        goal_idxs = m.active_goal_indices[env_ids]
+        return self.builder.build_bbq_edge_features(
+            positions,
+            object_ids,
+            active,
+            goal_idxs,
+            m.bbq_center_point,
+        )
+
+    @torch.no_grad()
+    def _build_bbq_edge_strings_from_features(self, edge_features: torch.Tensor) -> List[List[List[str]]]:
+        """
+        Decode BBQ edge channels into string relations.
+        Input edge format per object: [edge_exists, left_right, front_back, above_below, dist, id_diff]
+        Output: relations[e][j] -> list[str] for env e and object j.
+        """
+        return self.builder.decode_bbq_string_relations(edge_features)
+
+    @torch.no_grad()
+    def get_bbq_edge_string_relations(self, env_ids: Optional[torch.Tensor] = None) -> List[Dict[str, List[str]]]:
+        """
+        Returns string relations for BBQ edges as:
+        [
+          {"obj_name_0": ["left", "front"], "obj_name_1": ["below"], ...},
+          ... per env
+        ]
+        Relations are computed against the active goal object as anchor.
+        """
+        m = self.m
+        device = m.device
+        if env_ids is None:
+            env_ids = torch.arange(m.num_envs, device=device)
+
+        positions = m.positions[env_ids]
+        object_ids = m.object_ids.expand(len(env_ids), -1).unsqueeze(-1).float()
+        active = m.active[env_ids].unsqueeze(-1).float()
+
+        edge_features = self._build_bbq_edge_features(env_ids, positions, object_ids, active)
+        rel_lists = self._build_bbq_edge_strings_from_features(edge_features)
+
+        out: List[Dict[str, List[str]]] = []
+        names = m.names
+        for e in range(len(env_ids)):
+            env_dict: Dict[str, List[str]] = {}
+            for j, rels in enumerate(rel_lists[e]):
+                if rels:
+                    env_dict[names[j]] = rels
+            out.append(env_dict)
+        return out
 
     # ---------- Graph observation ----------
     @torch.no_grad()
@@ -145,39 +234,48 @@ class SceneGraph:
             dim=-1
         )  # (E, M, 14)
 
-        # --- edge features (используем СЫРЫЕ индексы, без деления) ---
-        edge_exists = (raw_parents >= 0).float().unsqueeze(-1)                     # (E, M, 1)
-        valid_mask  = (raw_parents >= 0)                                           # (E, M)
+        if m.bbq_edge or m.vl_sat_edge or m.sv_edge:
+            enabled_edges: List[torch.Tensor] = []
+            if m.bbq_edge:
+                bbq_edges = self.builder.build_bbq_edge_features(
+                    positions,
+                    object_ids,
+                    active,
+                    m.active_goal_indices[env_ids],
+                    m.bbq_center_point,
+                )
+                enabled_edges.append(bbq_edges)
+                m.last_bbq_edge_string_relations = self._build_bbq_edge_strings_from_features(bbq_edges)
+            else:
+                m.last_bbq_edge_string_relations = None
 
-        z_diff = torch.zeros(E, m.num_total_objects, 1, device=device)
-        level_diff = torch.zeros_like(z_diff)
-        dist = torch.zeros_like(z_diff)
-        color_diff_norm = torch.zeros_like(z_diff)
-        id_diff = torch.zeros_like(z_diff)
+            if m.vl_sat_edge:
+                enabled_edges.append(
+                    self.builder.build_vlsat_edge_features(
+                        positions,
+                        sizes,
+                        object_ids,
+                        active,
+                        m.active_goal_indices[env_ids],
+                        predictor=m.vl_sat_predictor,
+                    )
+                )
 
-        if valid_mask.any():
-            batch_idx = torch.arange(E, device=device)[:, None].expand(-1, m.num_total_objects)[valid_mask]
-            obj_idx   = torch.arange(m.num_total_objects, device=device)[None, :].expand(E, -1)[valid_mask]
-            parent_idx= raw_parents[valid_mask].long()
+            if m.sv_edge:
+                enabled_edges.append(
+                    self.builder.build_sceneverse_edge_features(
+                        positions,
+                        object_ids,
+                        active,
+                        m.active_goal_indices[env_ids],
+                    )
+                )
 
-            # z diff
-            z_diff[valid_mask] = positions[batch_idx, obj_idx, 2:3] - positions[batch_idx, parent_idx, 2:3]
-            # level diff
-            level_diff[valid_mask] = levels[batch_idx, obj_idx] - levels[batch_idx, parent_idx]
-            # xy distance
-            child_xy  = positions[batch_idx, obj_idx, :2]
-            parent_xy = positions[batch_idx, parent_idx, :2]
-            dist[valid_mask] = torch.norm(child_xy - parent_xy, dim=-1, keepdim=True)
-            # color diff
-            child_color  = colors[batch_idx, obj_idx]
-            parent_color = colors[batch_idx, parent_idx]
-            color_diff_norm[valid_mask] = torch.norm(child_color - parent_color, dim=-1, keepdim=True)
-            # id diff
-            child_id  = object_ids[batch_idx, obj_idx]
-            parent_id = object_ids[batch_idx, parent_idx]
-            id_diff[valid_mask] = child_id - parent_id
+            edge_features = self.builder.combine_enabled_edge_features(enabled_edges)
+        else:
+            edge_features = self._build_parent_edge_features(positions, levels, colors, object_ids, raw_parents)
+            m.last_bbq_edge_string_relations = None
 
-        edge_features = torch.cat([edge_exists, z_diff, level_diff, dist, color_diff_norm, id_diff], dim=-1)  # (E, M, 6)
         return {"node_features": node_features, "edge_features": edge_features}
 
 
@@ -375,6 +473,50 @@ class SceneManager:
             raw = json.load(f)
         self.raw_config = raw
         self.config = raw['objects']
+
+        def _to_bool(val) -> bool:
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, (int, float)):
+                return bool(val)
+            if isinstance(val, str):
+                return val.strip().lower() in {"1", "true", "yes", "on"}
+            return False
+
+        self.bbq_edge = _to_bool(raw.get('bbq_edge', False))
+        self.vl_sat_edge = _to_bool(raw.get('vl_sat_edge', False))
+        self.sv_edge = _to_bool(raw.get('sv_edge', False))
+
+        bbq_center = raw.get('bbq_center_point', [0.0, 0.0, 0.0])
+        if not isinstance(bbq_center, (list, tuple)) or len(bbq_center) != 3:
+            print(f"[WARN] Invalid bbq_center_point={bbq_center}, fallback to [0, 0, 0]")
+            bbq_center = [0.0, 0.0, 0.0]
+        self.bbq_center_point = torch.tensor(bbq_center, device=device, dtype=torch.float32)
+        self.last_bbq_edge_string_relations: Optional[List[List[List[str]]]] = None
+
+        self.vl_sat_predictor = None
+        if self.vl_sat_edge:
+            model_root = '/'.join([os.getcwd(), "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/vl_sat_model"])
+            vl_sat_config_path = raw.get("vl_sat_config_path", os.path.join(model_root, "config/mmgnet.json"))
+            vl_sat_rel_path = raw.get("vl_sat_relationships_path", os.path.join(model_root, "config/relationships.txt"))
+            vl_sat_ckpt_path = raw.get("vl_sat_ckpt_path", "")
+            vl_sat_num_points = int(raw.get("vl_sat_num_points", 512))
+
+            if not vl_sat_ckpt_path:
+                print("[WARN] vl_sat_edge=true but vl_sat_ckpt_path is empty. Falling back to heuristic VL-SAT edges.")
+            else:
+                try:
+                    self.vl_sat_predictor = VLSATEdgePredictorService(
+                        model_root=model_root,
+                        config_path=vl_sat_config_path,
+                        ckpt_path=vl_sat_ckpt_path,
+                        relationships_path=vl_sat_rel_path,
+                        num_points=vl_sat_num_points,
+                    )
+                    print("[INFO] VL-SAT predictor initialized successfully.")
+                except Exception as e:
+                    print(f"[WARN] Failed to initialize VL-SAT predictor ({e}). Falling back to heuristic VL-SAT edges.")
+
         self.type_placements_cfg = raw.get('type_placements', {})
         self.codebook = self._load_codebook('/'.join([os.getcwd(), "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/cdecode_dict.json"]))
     # в __init__ SceneManager:
@@ -387,6 +529,7 @@ class SceneManager:
         self.colors_dict = {k: base[k] for k in ['red','green','blue','yellow','gray','black','brown', 'orange']}  # любое подмножество
         # --- Векторизованная структура данных ---
         self.num_total_objects = sum(obj['count'] for obj in self.config)
+        self.graph_builder = SceneGraphBuilder(device=self.device, num_total_objects=self.num_total_objects)
         self.object_ids = torch.zeros(1, self.num_total_objects, device=self.device)
         self.object_map: Dict[str, Dict] = {}
         self.type_map = defaultdict(list)
@@ -1063,6 +1206,10 @@ class SceneManager:
                                use_local_frame: bool = True, reference_yaws: Optional[torch.Tensor] = None) -> List[str]:
         return self.graph.build_navigation_prompt(env_ids, goal_name=goal_name, radius=radius,
                                                   use_local_frame=use_local_frame, reference_yaws=reference_yaws)
+
+    @torch.no_grad()
+    def get_bbq_edge_string_relations(self, env_ids: Optional[torch.Tensor] = None) -> List[Dict[str, List[str]]]:
+        return self.graph.get_bbq_edge_string_relations(env_ids)
 
     @torch.no_grad()
     def encode_scene_graph(

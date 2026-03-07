@@ -1,4 +1,12 @@
 {
+  "bbq_edge": false,
+  "vl_sat_edge": true,
+  "sv_edge": false,
+  "bbq_center_point": [0.0, 0.0, 0.0],
+  "vl_sat_config_path": "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/vl_sat_model/config/mmgnet.json",
+  "vl_sat_relationships_path": "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/vl_sat_model/config/relationships.txt",
+  "vl_sat_ckpt_path": "",
+  "vl_sat_num_points": 512,
   "objects": [
     {
       "name": "table_2",
