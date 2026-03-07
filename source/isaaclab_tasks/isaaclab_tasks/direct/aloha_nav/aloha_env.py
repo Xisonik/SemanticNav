@@ -157,7 +157,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.random_actions = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
-        self.CL_ON = False
+        self.CL_ON = True
         self.stage = 0
         self.use_staff = True
         self.use_obstacles = True
