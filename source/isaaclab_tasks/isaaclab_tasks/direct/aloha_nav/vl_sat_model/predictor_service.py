@@ -61,9 +61,17 @@ class VLSATEdgePredictorService:
         with open(self.relationships_path, "r", encoding="utf-8") as f:
             rel_lines = [line.strip() for line in f.readlines() if line.strip()]
 
+        # The model is trained with multi_rel_outputs=true which removes the
+        # first entry ("none") from the relation list.  Model class 0 therefore
+        # corresponds to the *second* line (e.g. "supported by").  We store
+        # the mapping with a +1 offset so that 0 is always reserved for
+        # "none / not-computed" in our pipeline.
+        non_none_names = rel_lines[1:]  # skip "none"
         self.rel_id_to_rel_name: Dict[int, str] = {
-            i: name for i, name in enumerate(rel_lines)
+            0: "none",
+            **{i + 1: name for i, name in enumerate(non_none_names)}
         }
+        self.num_model_classes = len(non_none_names)  # 26
 
     def _ensure_import_paths(self) -> None:
         candidates = [
@@ -158,9 +166,11 @@ class VLSATEdgePredictorService:
         descriptor = descriptor.to(device)
         batch_ids = batch_ids.to(device)
 
-        rel_logits = self.model.model(
+        model_output = self.model.model(
             obj_points, obj_2d_feats, edge_indices, descriptor, batch_ids=batch_ids
         )
+        # forward() returns (rel_cls_3d, edge_feat_3d, edge_feat_2d)
+        rel_logits = model_output[0] if isinstance(model_output, tuple) else model_output
 
         rel_ids = torch.argmax(rel_logits, dim=1).detach().cpu().numpy()
         edge_np = edge_indices.detach().cpu().numpy()
@@ -169,5 +179,54 @@ class VLSATEdgePredictorService:
         for k in range(rel_ids.shape[0]):
             src_i = int(edge_np[0, k])
             dst_i = int(edge_np[1, k])
-            out[(src_i, dst_i)] = self.rel_id_to_rel_name.get(int(rel_ids[k]), "none")
+            # +1 because model classes are 0-based without "none";
+            # our mapping reserves 0 for "none".
+            mapped_id = int(rel_ids[k]) + 1
+            out[(src_i, dst_i)] = self.rel_id_to_rel_name.get(mapped_id, "none")
+        return out
+
+    @torch.no_grad()
+    def predict_pair_relation_ids_from_bboxes(
+        self,
+        centers_xyz: np.ndarray,
+        extents_xyz: np.ndarray,
+    ) -> Dict[Tuple[int, int], int]:
+        """
+        Returns directed pair relation-id map: (src_idx, dst_idx) -> rel_id (0..num_rel-1).
+        """
+        num_obj = centers_xyz.shape[0]
+        if num_obj < 2:
+            return {}
+
+        points: List[np.ndarray] = []
+        for i in range(num_obj):
+            points.append(self._sample_bbox_parallelepiped(centers_xyz[i], extents_xyz[i], self.num_points))
+
+        obj_points, obj_2d_feats, edge_indices, descriptor, batch_ids = self._preprocess_pointclouds(
+            points, self.num_points
+        )
+
+        device = self.config.DEVICE
+        obj_points = obj_points.to(device)
+        obj_2d_feats = obj_2d_feats.to(device)
+        edge_indices = edge_indices.to(device)
+        descriptor = descriptor.to(device)
+        batch_ids = batch_ids.to(device)
+
+        model_output = self.model.model(
+            obj_points, obj_2d_feats, edge_indices, descriptor, batch_ids=batch_ids
+        )
+        # forward() returns (rel_cls_3d, edge_feat_3d, edge_feat_2d)
+        rel_logits = model_output[0] if isinstance(model_output, tuple) else model_output
+
+        rel_ids = torch.argmax(rel_logits, dim=1).detach().cpu().numpy()
+        edge_np = edge_indices.detach().cpu().numpy()
+
+        out: Dict[Tuple[int, int], int] = {}
+        for k in range(rel_ids.shape[0]):
+            src_i = int(edge_np[0, k])
+            dst_i = int(edge_np[1, k])
+            # +1: model outputs 0-25 (trained without "none" class);
+            # our convention reserves 0 for "none / not-computed".
+            out[(src_i, dst_i)] = int(rel_ids[k]) + 1
         return out

@@ -169,9 +169,13 @@ class SceneGraphBuilder:
         goal_pos = positions[batch, goal_idxs]
         goal_id = object_ids[batch, goal_idxs]
 
-        left_right = torch.zeros(E, M, 1, device=positions.device)
-        front_back = torch.zeros(E, M, 1, device=positions.device)
-        above_below = torch.zeros(E, M, 1, device=positions.device)
+        rel_id_raw = torch.zeros(E, M, 1, device=positions.device)
+        rel_id_norm = torch.zeros(E, M, 1, device=positions.device)
+        rel_is_non_none = torch.zeros(E, M, 1, device=positions.device)
+
+        # Model outputs 26 classes (0-25, no "none").  predictor_service
+        # shifts them +1 so that 0 = "none / not-computed", 1-26 = real.
+        max_rel_id = 26.0
 
         if predictor is not None:
             for e in range(E):
@@ -184,9 +188,9 @@ class SceneGraphBuilder:
                 extents = sizes[e, idx_active].detach().cpu().numpy()
 
                 try:
-                    pair_rel = predictor.predict_pair_relations_from_bboxes(centers, extents)
+                    pair_rel_ids = predictor.predict_pair_relation_ids_from_bboxes(centers, extents)
                 except Exception:
-                    pair_rel = {}
+                    pair_rel_ids = {}
 
                 local_goal = torch.nonzero(idx_active == goal_idxs[e], as_tuple=False)
                 if local_goal.numel() == 0:
@@ -197,48 +201,48 @@ class SceneGraphBuilder:
                     if global_i == int(goal_idxs[e].item()):
                         continue
 
-                    rel_name = pair_rel.get((local_i, g_local), "none").strip().lower()
-
-                    if rel_name == "left":
-                        left_right[e, global_i, 0] = -1.0
-                    elif rel_name == "right":
-                        left_right[e, global_i, 0] = 1.0
-
-                    if rel_name == "front":
-                        front_back[e, global_i, 0] = -1.0
-                    elif rel_name in {"behind", "back"}:
-                        front_back[e, global_i, 0] = 1.0
-
-                    if rel_name in {"higher than", "above"}:
-                        above_below[e, global_i, 0] = -1.0
-                    elif rel_name in {"lower than", "below"}:
-                        above_below[e, global_i, 0] = 1.0
+                    rel_id = float(pair_rel_ids.get((local_i, g_local), 0))
+                    rel_id_raw[e, global_i, 0] = rel_id
+                    rel_id_norm[e, global_i, 0] = rel_id / max_rel_id
+                    rel_is_non_none[e, global_i, 0] = 1.0 if rel_id > 0 else 0.0
         else:
             rel = positions - goal_pos.unsqueeze(1)
-            left_right = torch.sign(rel[..., 0:1])
-            front_back = torch.sign(rel[..., 1:2])
-            above_below = torch.sign(rel[..., 2:3])
+            rel_id_raw = torch.zeros_like(rel[..., 0:1])
+            rel_id_norm = torch.zeros_like(rel[..., 0:1])
+            rel_is_non_none = (torch.linalg.norm(rel, dim=-1, keepdim=True) > 0).float()
 
         valid_mask_f = self._build_goal_anchor_mask(active, goal_idxs, M)
 
         edge_exists = valid_mask_f
-        left_right = left_right * valid_mask_f
-        front_back = front_back * valid_mask_f
-        above_below = above_below * valid_mask_f
+        rel_id_raw = rel_id_raw * valid_mask_f
+        rel_id_norm = rel_id_norm * valid_mask_f
+        rel_is_non_none = rel_is_non_none * valid_mask_f
         rel = positions - goal_pos.unsqueeze(1)
         dist = torch.linalg.norm(rel, dim=-1, keepdim=True) * valid_mask_f
         id_diff = (object_ids - goal_id.unsqueeze(1)) * valid_mask_f
 
-        return torch.cat([edge_exists, left_right, front_back, above_below, dist, id_diff], dim=-1)
+        return torch.cat([edge_exists, rel_id_raw, rel_id_norm, rel_is_non_none, dist, id_diff], dim=-1)
 
     @torch.no_grad()
     def build_sceneverse_edge_features(
         self,
         positions: torch.Tensor,
+        sizes: torch.Tensor,
         object_ids: torch.Tensor,
         active: torch.Tensor,
         goal_idxs: torch.Tensor,
+        predictor: Optional[object] = None,
+        names: Optional[list] = None,
     ) -> torch.Tensor:
+        """Build SV edge features using SceneVerse heuristic predictor.
+
+        Encoding (same 6-channel layout as VL-SAT edges):
+            [edge_exists, rel_id_raw, rel_id_norm, rel_is_non_none, dist, id_diff]
+
+        ``rel_id_raw``  – integer class id in [0, 9] as float.
+        ``rel_id_norm`` – class id normalised to [0, 1].
+        ``rel_is_non_none`` – 1.0 if relation is not "none", else 0.0.
+        """
         E, M, _ = positions.shape
         batch = torch.arange(E, device=positions.device)
 
@@ -246,28 +250,65 @@ class SceneGraphBuilder:
         goal_pos = positions[batch, goal_idxs]
         goal_id = object_ids[batch, goal_idxs]
 
-        rel = positions - goal_pos.unsqueeze(1)
-        abs_rel = rel.abs()
-        dom = torch.argmax(abs_rel, dim=-1)
+        rel_id_raw = torch.zeros(E, M, 1, device=positions.device)
+        rel_id_norm = torch.zeros(E, M, 1, device=positions.device)
+        rel_is_non_none = torch.zeros(E, M, 1, device=positions.device)
 
-        left_right = torch.zeros(E, M, 1, device=positions.device)
-        front_back = torch.zeros(E, M, 1, device=positions.device)
-        above_below = torch.zeros(E, M, 1, device=positions.device)
+        max_rel_id = 9.0  # NUM_SV_RELATIONS - 1
 
-        left_right[dom == 0] = torch.sign(rel[..., 0:1][dom == 0])
-        front_back[dom == 1] = torch.sign(rel[..., 1:2][dom == 1])
-        above_below[dom == 2] = torch.sign(rel[..., 2:3][dom == 2])
+        if predictor is not None:
+            for e in range(E):
+                active_mask = active[e, :, 0] > 0.5
+                if active_mask.sum().item() < 2:
+                    continue
+
+                idx_active = torch.nonzero(active_mask, as_tuple=False).view(-1)
+                centers = positions[e, idx_active].detach().cpu().numpy()
+                extents = sizes[e, idx_active].detach().cpu().numpy()
+
+                obj_names = None
+                if names is not None:
+                    obj_names = [names[g] for g in idx_active.tolist()]
+
+                # Find local index of goal within active objects
+                local_goal = torch.nonzero(idx_active == goal_idxs[e], as_tuple=False)
+                if local_goal.numel() == 0:
+                    continue
+                g_local = int(local_goal[0, 0].item())
+
+                try:
+                    obj_rels = predictor.predict_pair_relation_ids_for_anchor(
+                        centers, extents, g_local, obj_names
+                    )
+                except Exception:
+                    obj_rels = {}
+
+                for local_i, global_i in enumerate(idx_active.tolist()):
+                    if global_i == int(goal_idxs[e].item()):
+                        continue
+
+                    rel_id = float(obj_rels.get(local_i, 0))
+                    rel_id_raw[e, global_i, 0] = rel_id
+                    rel_id_norm[e, global_i, 0] = rel_id / max_rel_id
+                    rel_is_non_none[e, global_i, 0] = 1.0 if rel_id > 0 else 0.0
+        else:
+            # Fallback: use simple geometric heuristic (no predictor)
+            rel = positions - goal_pos.unsqueeze(1)
+            rel_id_raw = torch.zeros_like(rel[..., 0:1])
+            rel_id_norm = torch.zeros_like(rel[..., 0:1])
+            rel_is_non_none = (torch.linalg.norm(rel, dim=-1, keepdim=True) > 0).float()
 
         valid_mask_f = self._build_goal_anchor_mask(active, goal_idxs, M)
 
         edge_exists = valid_mask_f
-        left_right = left_right * valid_mask_f
-        front_back = front_back * valid_mask_f
-        above_below = above_below * valid_mask_f
+        rel_id_raw = rel_id_raw * valid_mask_f
+        rel_id_norm = rel_id_norm * valid_mask_f
+        rel_is_non_none = rel_is_non_none * valid_mask_f
+        rel = positions - goal_pos.unsqueeze(1)
         dist = torch.linalg.norm(rel, dim=-1, keepdim=True) * valid_mask_f
         id_diff = (object_ids - goal_id.unsqueeze(1)) * valid_mask_f
 
-        return torch.cat([edge_exists, left_right, front_back, above_below, dist, id_diff], dim=-1)
+        return torch.cat([edge_exists, rel_id_raw, rel_id_norm, rel_is_non_none, dist, id_diff], dim=-1)
 
     @torch.no_grad()
     def combine_enabled_edge_features(self, features: List[torch.Tensor]) -> torch.Tensor:

@@ -1,0 +1,147 @@
+import numpy as np
+
+try:
+    import networkx as nx
+    import trimesh
+    import matplotlib.pyplot as plt
+    import pyvista as pv
+except ImportError:
+    nx = trimesh = plt = pv = None
+
+
+class ObjNode(object):
+    def __init__(self, id=None, label=None, mesh=None, 
+                 position=None, x_min=None, x_max=None, 
+                 y_min=None, y_max=None, z_min=None, z_max=None,
+                 size=None, children=None,
+                 room_id=None, dataset='scannet'):
+        self.id = id
+        self.label = label
+        self.obj_mesh = mesh
+        self.position = np.asarray(position, dtype=float) if position is not None else np.zeros(3)
+        self.room_id = room_id
+        self.children = children if children is not None else []
+
+        # If explicit bounds are given, use them directly.
+        # Otherwise derive from position + size (full extent).
+        if x_min is not None:
+            self.x_min = x_min
+            self.x_max = x_max
+            self.y_min = y_min
+            self.y_max = y_max
+            self.z_min = z_min
+            self.z_max = z_max
+        elif size is not None:
+            size = np.asarray(size, dtype=float)
+            half = size / 2.0
+            self.x_min = self.position[0] - half[0]
+            self.x_max = self.position[0] + half[0]
+            self.y_min = self.position[1] - half[1]
+            self.y_max = self.position[1] + half[1]
+            self.z_min = self.position[2] - half[2]
+            self.z_max = self.position[2] + half[2]
+        else:
+            self.x_min = self.x_max = self.position[0]
+            self.y_min = self.y_max = self.position[1]
+            self.z_min = self.z_max = self.position[2]
+
+        # Store size for visualizers that reference obj.size
+        self.size = np.array([self.x_max - self.x_min,
+                              self.y_max - self.y_min,
+                              self.z_max - self.z_min])
+
+        self.align_matrix, self.position, self.bottom_rect, self.top_rect = self.get_object_information(dataset)
+
+    def __str__(self):
+        return "[{}:{},{},{}]".format(self.id, self.label, self.position, self.angle)
+
+    def get_object_information(self, dataset):
+        position = self.position # - bias
+        axis_align_matrix = None
+        top_vertics = np.array([[self.x_min, self.y_min, self.z_min], [self.x_max, self.y_min, self.z_min],
+                                [self.x_max, self.y_max, self.z_min], [self.x_min, self.y_max, self.z_min]])
+        bottom_vertics = np.array([[self.x_min, self.y_min, self.z_max], [self.x_max, self.y_min, self.z_max], [self.x_max, self.y_max, self.z_max],
+                               [self.x_min, self.y_max, self.z_max]])
+
+        return axis_align_matrix, position, bottom_vertics, top_vertics
+
+    def display_obb_box(self, scene_visible = True):
+
+        axis_align_matrix = self.align_matrix
+
+        obj_mesh = trimesh.load(self.obj_mesh)
+        scene_ply = pv.read(self.scan_ply)
+
+        # rotate to axis align
+        obj_mesh.apply_transform(axis_align_matrix)
+
+        if self.label == 'floor':
+
+            scene_mesh = trimesh.load(self.scan_mesh)
+            scene_mesh.apply_transform(axis_align_matrix)
+
+            # draw aabb
+            tgt_points = np.array(scene_mesh.bounding_box.as_outline().vertices)
+            tgt_edges = np.array(scene_mesh.bounding_box.as_outline().vertex_nodes)
+            tgt_points_new = []
+            for edge in tgt_edges:
+                tgt_points_new.append(tgt_points[edge[0]])
+                tgt_points_new.append(tgt_points[edge[1]])
+
+            # show results
+            plotter = pv.Plotter(off_screen=False)
+            light = pv.Light(light_type='headlight', intensity=0.2)
+            plotter.add_light(light)
+
+            plotter.add_mesh(scene_ply.transform(axis_align_matrix), rgb=True)
+            plotter.add_lines(np.array(tgt_points_new), color='red', width=3)
+
+        else:
+            # draw bbox
+            tgt_points = np.array(obj_mesh.bounding_box_oriented.as_outline().vertices)
+            tgt_edges = np.array(obj_mesh.bounding_box_oriented.as_outline().vertex_nodes)
+            tgt_points_new = []
+            for edge in tgt_edges:
+                tgt_points_new.append(tgt_points[edge[0]])
+                tgt_points_new.append(tgt_points[edge[1]])
+
+            # draw aabb
+            aa_tgt_points = np.array(obj_mesh.bounding_box.as_outline().vertices)
+            aa_tgt_edges = np.array(obj_mesh.bounding_box.as_outline().vertex_nodes)
+            aa_tgt_points_new = []
+            for edge in aa_tgt_edges:
+                aa_tgt_points_new.append(aa_tgt_points[edge[0]])
+                aa_tgt_points_new.append(aa_tgt_points[edge[1]])
+
+            # show results
+            plotter = pv.Plotter(off_screen=False)
+            light = pv.Light(light_type='headlight', intensity=0.2)
+            plotter.add_light(light)
+
+            plotter.add_mesh(scene_ply.transform(axis_align_matrix), rgb=True)
+            plotter.add_lines(np.array(tgt_points_new), color='red', width=3)
+            plotter.add_lines(np.array(aa_tgt_points_new), color='yellow', width=3)
+
+        plotter.camera.zoom(1.2)
+        plotter.show()
+
+
+if __name__ == '__main__':
+    obj_sample = ObjNode(id=1, label='',
+                         position=[0, 0, 0],
+                         size=[1, 1, 1],
+                         mesh='../../DataAnnotation/data/scannet_objs/scene0000_00/45/mesh.obj')
+    G = nx.MultiDiGraph()
+    G.add_node(obj_sample.id, desc = 'here1')
+    G.add_node(obj_sample.id+1, desc = 'here2')
+    G.add_node(obj_sample.id +3, desc = 'here3')
+    G.add_edge(1, 2, name ='support')
+    G.add_edge(2, 1, name='support2')
+    pos = nx.spring_layout(G)
+    nx.draw(G,pos)
+    node_labels = nx.get_node_attributes(G, 'desc')
+    nx.draw_networkx_labels(G, pos, labels=node_labels)
+    edge_labels = nx.get_edge_attributes(G, 'name')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
+
+    plt.show()

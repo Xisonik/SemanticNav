@@ -33,6 +33,7 @@ import math
 import random
 import json
 import os
+import sys
 from collections import defaultdict
 from tabulate import tabulate
 import importlib.util
@@ -57,6 +58,12 @@ PlacementStrategy = import_class_from_path(module_path, "PlacementStrategy")
 GridPlacement = import_class_from_path(module_path, "GridPlacement")
 GridPlacementWithOrientation = import_class_from_path(module_path, "GridPlacementWithOrientation")
 OnSurfacePlacement = import_class_from_path(module_path, "OnSurfacePlacement")
+
+# SceneVerse edge predictor (package with relative imports → add aloha_nav to path)
+_aloha_nav_dir = os.path.join(os.getcwd(), "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav")
+if _aloha_nav_dir not in sys.path:
+    sys.path.insert(0, _aloha_nav_dir)
+from scene_verse.edge_predictor import SceneVerseEdgePredictorService
 
 
 # =====================
@@ -265,9 +272,12 @@ class SceneGraph:
                 enabled_edges.append(
                     self.builder.build_sceneverse_edge_features(
                         positions,
+                        sizes,
                         object_ids,
                         active,
                         m.active_goal_indices[env_ids],
+                        predictor=m.sv_predictor,
+                        names=m.names,
                     )
                 )
 
@@ -516,6 +526,14 @@ class SceneManager:
                     print("[INFO] VL-SAT predictor initialized successfully.")
                 except Exception as e:
                     print(f"[WARN] Failed to initialize VL-SAT predictor ({e}). Falling back to heuristic VL-SAT edges.")
+
+        self.sv_predictor = None
+        if self.sv_edge:
+            try:
+                self.sv_predictor = SceneVerseEdgePredictorService()
+                print("[INFO] SceneVerse edge predictor initialized successfully.")
+            except Exception as e:
+                print(f"[WARN] Failed to initialize SceneVerse edge predictor ({e}). Falling back to simple SV edges.")
 
         self.type_placements_cfg = raw.get('type_placements', {})
         self.codebook = self._load_codebook('/'.join([os.getcwd(), "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/cdecode_dict.json"]))

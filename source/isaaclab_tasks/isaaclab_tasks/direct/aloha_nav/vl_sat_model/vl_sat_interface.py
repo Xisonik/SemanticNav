@@ -76,9 +76,11 @@ class EdgePredictor:
         descriptor = descriptor.to(self.config.DEVICE)
         batch_ids = batch_ids.to(self.config.DEVICE)
         with torch.no_grad():
-            rel_cls_3d = self.model.model(
+            model_output = self.model.model(
                 obj_points, obj_2d_feats, edge_indices, descriptor, batch_ids=batch_ids
             )
+        # forward() returns (rel_cls_3d, edge_feat_3d, edge_feat_2d)
+        rel_cls_3d = model_output[0] if isinstance(model_output, tuple) else model_output
         return rel_cls_3d
 
     def save_relations(self, tracking_ids, timestamps, class_names, predicted_relations, edge_indices):

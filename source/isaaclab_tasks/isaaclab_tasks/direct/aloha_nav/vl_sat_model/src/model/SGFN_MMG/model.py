@@ -269,8 +269,6 @@ class Mmgnet(BaseModel):
         return torch.mean(torch.tensor(triplet_loss))
     
     def forward(self, obj_points, obj_2d_feats, edge_indices, descriptor=None, batch_ids=None, istrain=False):
-
-        print('*'*50, "/home/docker_user/BeyondBareQueries/src/model/SGFN_MMG/model.py")
         
         obj_feature = self.obj_encoder(obj_points)
         if istrain:
@@ -289,9 +287,6 @@ class Mmgnet(BaseModel):
 
         rel_feature_2d = self.rel_encoder_2d(edge_feature)
         rel_feature_3d = self.rel_encoder_3d(edge_feature)
-
-        print(f"rel_feature_2d: {rel_feature_2d.shape}")
-        print(f"rel_feature_3d: {rel_feature_3d.shape}")
         
         ''' Create 2d feature'''
         with torch.no_grad():
@@ -302,10 +297,6 @@ class Mmgnet(BaseModel):
         obj_center = descriptor[:, :3].clone()
         gcn_obj_feature_3d, gcn_obj_feature_2d, gcn_edge_feature_3d, gcn_edge_feature_2d \
             = self.mmg(obj_feature, obj_2d_feats, rel_feature_3d, rel_feature_2d, edge_indices, batch_ids, obj_center, descriptor.clone(), istrain=istrain)
-
-        # print dims
-        print(f"gcn_edge_feature_3d: {gcn_edge_feature_3d.shape}")
-        print(f"gcn_edge_feature_2d: {gcn_edge_feature_2d.shape}")
         
         # gcn_edge_feature_3d_dis = self.generate_object_pair_features(gcn_obj_feature_3d, gcn_edge_feature_3d, edge_indices)
         gcn_edge_feature_2d_dis = self.generate_object_pair_features(gcn_obj_feature_2d, gcn_edge_feature_2d, edge_indices)
