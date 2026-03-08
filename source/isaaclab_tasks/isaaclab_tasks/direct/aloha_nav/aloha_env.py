@@ -75,7 +75,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
         "memory": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2056,)), 
         "goal": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(2,), dtype=np.float32),
         "orientation": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(1,), dtype=np.float32),
-        "graph": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(24*num_total_objects,), dtype=np.float32)
+        "graph": gym.spaces.Box(low=-float("inf"), high=float("inf"), shape=(30*num_total_objects,), dtype=np.float32)
     })
     state_space = 0
     debug_vis = False
@@ -172,7 +172,7 @@ class WheeledRobotEnv(DirectRLEnv):
         if self.use_controller:
             self.path_manager = Path_manager(scene_manager=self.scene_manager, ratio=4.0, shift=[5, 5], device=self.device)
             self.control_module = VectorizedPurePursuit(num_envs=self.num_envs, device=self.device)
-        self.scene_embeddings = torch.zeros(self.num_envs, 24*num_total_objects, device=self.device)
+        self.scene_embeddings = torch.zeros(self.num_envs, 30*num_total_objects, device=self.device)
 
         self._actions = torch.zeros((self.num_envs, 2), device=self.device)
         self._actions[:, 1] = 0.0
@@ -1090,6 +1090,18 @@ class WheeledRobotEnv(DirectRLEnv):
        
         # ========== RETURN ==========
         return obs_buf, reward_buf, reset_terminated, reset_time_outs, extras
+
+    # ----------- Scene-graph diagnostic -----------
+    def debug_scene_graph_embedding(self, env_id: int = 0):
+        """Pretty-print the scene-graph embedding for one env.
+
+        Call from a breakpoint, evaluation callback, or after ``_reset_idx``::
+
+            self.debug_scene_graph_embedding(0)
+        """
+        self.scene_manager.decode_scene_embedding(
+            self.scene_embeddings, env_idx=env_id, verbose=True,
+        )
 
     def setup_omni_warning_handler(self):
         import logging

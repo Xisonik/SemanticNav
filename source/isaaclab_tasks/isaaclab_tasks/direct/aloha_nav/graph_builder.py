@@ -328,6 +328,276 @@ class SceneGraphBuilder:
 
         return torch.cat([exists, signed, dist, id_diff], dim=-1)
 
+    # ------------------------------------------------------------------
+    # Ring-neighbour topology
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def compute_ring_neighbor_indices(
+        self,
+        positions: torch.Tensor,   # [E, M, 3]
+        active: torch.Tensor,      # [E, M, 1]
+        goal_idxs: torch.Tensor,   # [E]
+    ) -> torch.Tensor:
+        """Compute a ring ordering of active non-goal objects.
+
+        Active non-goal objects are sorted by ``atan2(dy, dx)`` relative to
+        the goal position.  Object *i* in the sorted ring connects to object
+        ``(i+1) % N``.  Goal and inactive objects receive ``-1`` (no
+        neighbour).
+
+        Returns:
+            ``[E, M]`` long tensor – ring neighbour global index (or -1).
+        """
+        E, M, _ = positions.shape
+        device = positions.device
+        batch = torch.arange(E, device=device)
+
+        goal_idxs = goal_idxs.long().clamp(0, M - 1)
+        goal_pos = positions[batch, goal_idxs]  # [E, 3]
+
+        neighbor_indices = torch.full((E, M), -1, dtype=torch.long, device=device)
+
+        for e in range(E):
+            active_mask = active[e, :, 0] > 0.5
+            gi = goal_idxs[e].item()
+
+            non_goal_mask = active_mask.clone()
+            non_goal_mask[gi] = False
+            idx_active = torch.nonzero(non_goal_mask, as_tuple=False).view(-1)
+
+            if len(idx_active) < 2:
+                continue
+
+            # angular sort around goal
+            delta = positions[e, idx_active, :2] - goal_pos[e, :2].unsqueeze(0)
+            angles = torch.atan2(delta[:, 1], delta[:, 0])
+            sorted_order = torch.argsort(angles)
+            sorted_indices = idx_active[sorted_order]
+
+            N = len(sorted_indices)
+            for i in range(N):
+                neighbor_indices[e, sorted_indices[i].item()] = sorted_indices[(i + 1) % N].item()
+
+        return neighbor_indices
+
+    # ------------------------------------------------------------------
+    # Neighbour-edge builders  (same 6-ch layout as goal-edge builders)
+    # ------------------------------------------------------------------
+
+    @torch.no_grad()
+    def build_bbq_neighbor_edge_features(
+        self,
+        positions: torch.Tensor,
+        object_ids: torch.Tensor,
+        active: torch.Tensor,
+        center_point: torch.Tensor,
+        neighbor_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """BBQ directional edge from each object to its ring neighbour."""
+        E, M, _ = positions.shape
+        device = positions.device
+
+        has_nbr = (neighbor_indices >= 0)  # [E, M]
+        safe_nbr = neighbor_indices.clamp(min=0)
+        batch_idx = torch.arange(E, device=device).unsqueeze(1).expand(E, M)
+
+        nbr_pos = positions[batch_idx, safe_nbr]   # [E, M, 3]
+        nbr_id = object_ids[batch_idx, safe_nbr]   # [E, M, 1]
+
+        center = center_point.view(1, 1, 3).expand(E, M, 3)
+        rel_x, rel_y, rel_z = self.bbq_relative_components(positions, nbr_pos, center)
+
+        mask = has_nbr.unsqueeze(-1).float()
+        edge_exists = mask
+        left_right = torch.sign(rel_x) * mask
+        front_back = torch.sign(rel_z) * mask
+        above_below = torch.sign(rel_y) * mask
+        dist = torch.linalg.norm(positions - nbr_pos, dim=-1, keepdim=True) * mask
+        id_diff = (object_ids - nbr_id) * mask
+
+        return torch.cat([edge_exists, left_right, front_back, above_below, dist, id_diff], dim=-1)
+
+    @torch.no_grad()
+    def build_vlsat_neighbor_edge_features(
+        self,
+        positions: torch.Tensor,
+        sizes: torch.Tensor,
+        object_ids: torch.Tensor,
+        active: torch.Tensor,
+        neighbor_indices: torch.Tensor,
+        predictor: Optional[object] = None,
+    ) -> torch.Tensor:
+        """VL-SAT relation edge from each object to its ring neighbour."""
+        E, M, _ = positions.shape
+        device = positions.device
+
+        has_nbr = (neighbor_indices >= 0)
+        safe_nbr = neighbor_indices.clamp(min=0)
+        batch_idx = torch.arange(E, device=device).unsqueeze(1).expand(E, M)
+        nbr_pos = positions[batch_idx, safe_nbr]
+        nbr_id = object_ids[batch_idx, safe_nbr]
+
+        rel_id_raw = torch.zeros(E, M, 1, device=device)
+        rel_id_norm = torch.zeros(E, M, 1, device=device)
+        rel_is_non_none = torch.zeros(E, M, 1, device=device)
+        max_rel_id = 26.0
+
+        if predictor is not None:
+            for e in range(E):
+                active_mask = active[e, :, 0] > 0.5
+                if active_mask.sum().item() < 2:
+                    continue
+
+                idx_active = torch.nonzero(active_mask, as_tuple=False).view(-1)
+                centers = positions[e, idx_active].detach().cpu().numpy()
+                extents = sizes[e, idx_active].detach().cpu().numpy()
+
+                try:
+                    pair_rel_ids = predictor.predict_pair_relation_ids_from_bboxes(centers, extents)
+                except Exception:
+                    pair_rel_ids = {}
+
+                global_to_local = {int(g): l for l, g in enumerate(idx_active.tolist())}
+
+                for local_i, global_i in enumerate(idx_active.tolist()):
+                    nbr_global = neighbor_indices[e, global_i].item()
+                    if nbr_global < 0:
+                        continue
+                    nbr_local = global_to_local.get(nbr_global, -1)
+                    if nbr_local < 0:
+                        continue
+
+                    rel_id = float(pair_rel_ids.get((local_i, nbr_local), 0))
+                    rel_id_raw[e, global_i, 0] = rel_id
+                    rel_id_norm[e, global_i, 0] = rel_id / max_rel_id
+                    rel_is_non_none[e, global_i, 0] = 1.0 if rel_id > 0 else 0.0
+
+        mask = has_nbr.unsqueeze(-1).float()
+        edge_exists = mask
+        rel_id_raw = rel_id_raw * mask
+        rel_id_norm = rel_id_norm * mask
+        rel_is_non_none = rel_is_non_none * mask
+        dist = torch.linalg.norm(positions - nbr_pos, dim=-1, keepdim=True) * mask
+        id_diff = (object_ids - nbr_id) * mask
+
+        return torch.cat([edge_exists, rel_id_raw, rel_id_norm, rel_is_non_none, dist, id_diff], dim=-1)
+
+    @torch.no_grad()
+    def build_sceneverse_neighbor_edge_features(
+        self,
+        positions: torch.Tensor,
+        sizes: torch.Tensor,
+        object_ids: torch.Tensor,
+        active: torch.Tensor,
+        neighbor_indices: torch.Tensor,
+        predictor: Optional[object] = None,
+        names: Optional[list] = None,
+    ) -> torch.Tensor:
+        """SceneVerse relation edge from each object to its ring neighbour."""
+        E, M, _ = positions.shape
+        device = positions.device
+
+        has_nbr = (neighbor_indices >= 0)
+        safe_nbr = neighbor_indices.clamp(min=0)
+        batch_idx = torch.arange(E, device=device).unsqueeze(1).expand(E, M)
+        nbr_pos = positions[batch_idx, safe_nbr]
+        nbr_id = object_ids[batch_idx, safe_nbr]
+
+        rel_id_raw = torch.zeros(E, M, 1, device=device)
+        rel_id_norm = torch.zeros(E, M, 1, device=device)
+        rel_is_non_none = torch.zeros(E, M, 1, device=device)
+        max_rel_id = 9.0
+
+        if predictor is not None:
+            for e in range(E):
+                active_mask = active[e, :, 0] > 0.5
+                if active_mask.sum().item() < 2:
+                    continue
+
+                idx_active = torch.nonzero(active_mask, as_tuple=False).view(-1)
+                centers = positions[e, idx_active].detach().cpu().numpy()
+                extents = sizes[e, idx_active].detach().cpu().numpy()
+
+                obj_names = None
+                if names is not None:
+                    obj_names = [names[g] for g in idx_active.tolist()]
+
+                global_to_local = {int(g): l for l, g in enumerate(idx_active.tolist())}
+
+                for local_i, global_i in enumerate(idx_active.tolist()):
+                    nbr_global = neighbor_indices[e, global_i].item()
+                    if nbr_global < 0:
+                        continue
+                    nbr_local = global_to_local.get(nbr_global, -1)
+                    if nbr_local < 0:
+                        continue
+
+                    try:
+                        obj_rels = predictor.predict_pair_relation_ids_for_anchor(
+                            centers, extents, nbr_local, obj_names
+                        )
+                    except Exception:
+                        obj_rels = {}
+
+                    rel_id = float(obj_rels.get(local_i, 0))
+                    rel_id_raw[e, global_i, 0] = rel_id
+                    rel_id_norm[e, global_i, 0] = rel_id / max_rel_id
+                    rel_is_non_none[e, global_i, 0] = 1.0 if rel_id > 0 else 0.0
+
+        mask = has_nbr.unsqueeze(-1).float()
+        edge_exists = mask
+        rel_id_raw = rel_id_raw * mask
+        rel_id_norm = rel_id_norm * mask
+        rel_is_non_none = rel_is_non_none * mask
+        dist = torch.linalg.norm(positions - nbr_pos, dim=-1, keepdim=True) * mask
+        id_diff = (object_ids - nbr_id) * mask
+
+        return torch.cat([edge_exists, rel_id_raw, rel_id_norm, rel_is_non_none, dist, id_diff], dim=-1)
+
+    @torch.no_grad()
+    def build_parent_neighbor_edge_features(
+        self,
+        positions: torch.Tensor,
+        levels: torch.Tensor,
+        colors: torch.Tensor,
+        object_ids: torch.Tensor,
+        neighbor_indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """Geometric edge (z_diff, level_diff, dist, color_diff) to ring neighbour."""
+        E, M, _ = positions.shape
+        device = positions.device
+
+        has_nbr = (neighbor_indices >= 0)
+        safe_nbr = neighbor_indices.clamp(min=0)
+        batch_idx = torch.arange(E, device=device).unsqueeze(1).expand(E, M)
+
+        z_diff = torch.zeros(E, M, 1, device=device)
+        level_diff = torch.zeros_like(z_diff)
+        dist = torch.zeros_like(z_diff)
+        color_diff_norm = torch.zeros_like(z_diff)
+        id_diff = torch.zeros_like(z_diff)
+
+        if has_nbr.any():
+            obj_idx = torch.arange(M, device=device).unsqueeze(0).expand(E, M)
+            z_diff[has_nbr] = (positions[batch_idx, obj_idx, 2:3] - positions[batch_idx, safe_nbr, 2:3])[has_nbr]
+            level_diff[has_nbr] = (levels[batch_idx, obj_idx] - levels[batch_idx, safe_nbr])[has_nbr]
+
+            child_xy = positions[batch_idx, obj_idx, :2]
+            nbr_xy = positions[batch_idx, safe_nbr, :2]
+            dist[has_nbr] = torch.norm(child_xy - nbr_xy, dim=-1, keepdim=True)[has_nbr]
+
+            child_color = colors[batch_idx, obj_idx]
+            nbr_color = colors[batch_idx, safe_nbr]
+            color_diff_norm[has_nbr] = torch.norm(child_color - nbr_color, dim=-1, keepdim=True)[has_nbr]
+
+            child_id = object_ids[batch_idx, obj_idx]
+            nbr_id_t = object_ids[batch_idx, safe_nbr]
+            id_diff[has_nbr] = (child_id - nbr_id_t)[has_nbr]
+
+        edge_exists = has_nbr.unsqueeze(-1).float()
+        return torch.cat([edge_exists, z_diff, level_diff, dist, color_diff_norm, id_diff], dim=-1)
+
     @torch.no_grad()
     def decode_bbq_string_relations(self, edge_features: torch.Tensor) -> List[List[List[str]]]:
         E, M, _ = edge_features.shape

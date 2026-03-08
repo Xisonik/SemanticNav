@@ -732,6 +732,300 @@ def test_different_goals(builder, scene: dict):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# 13. Ring neighbour indices
+# ──────────────────────────────────────────────────────────────────────
+
+def test_ring_neighbors(builder, scene: dict):
+    """Verify ring-neighbour topology: closed ring of active non-goal objects."""
+    _header("13. Ring neighbour indices")
+    try:
+        E, M = scene["E"], scene["M"]
+        positions = scene["positions"]
+        active = scene["active"]
+        goal_idxs = scene["goal_idxs"]
+
+        ring = builder.compute_ring_neighbor_indices(positions, active, goal_idxs)
+        assert ring.shape == (E, M), f"Expected [{E},{M}], got {list(ring.shape)}"
+        _ok(f"Shape {list(ring.shape)} ✓")
+
+        for e in range(E):
+            gi = goal_idxs[e].item()
+            assert ring[e, gi].item() == -1, "Goal must have neighbour=-1"
+
+            # Collect active non-goal
+            active_ng = [j for j in range(M) if active[e, j, 0] > 0.5 and j != gi]
+            N = len(active_ng)
+
+            if N < 2:
+                _ok(f"Env {e}: <2 active non-goal → no ring (correct)")
+                continue
+
+            # Verify every active non-goal has a neighbour
+            for j in active_ng:
+                nbr = ring[e, j].item()
+                assert nbr >= 0, f"Env {e}, obj {j}: active but no ring neighbour"
+                assert nbr in active_ng, f"Env {e}, obj {j}: neighbour {nbr} not in active set"
+
+            # Walk the ring — should visit all nodes exactly once
+            visited = set()
+            cur = active_ng[0]
+            for _ in range(N):
+                assert cur not in visited, f"Env {e}: ring revisits {cur}"
+                visited.add(cur)
+                cur = ring[e, cur].item()
+            assert visited == set(active_ng), f"Env {e}: ring incomplete {visited} vs {set(active_ng)}"
+            _ok(f"Env {e}: ring length {N}, closed ✓")
+
+        # Test with different goal
+        alt_goal = torch.tensor([1] * E, dtype=torch.long, device=scene["device"])
+        ring2 = builder.compute_ring_neighbor_indices(positions, active, alt_goal)
+        for e in range(E):
+            assert ring2[e, 1].item() == -1, "Alt goal (idx 1) must have neighbour=-1"
+        _ok("Ring adapts to different goal ✓")
+
+        _ok("Ring neighbour indices PASSED")
+        return True
+    except Exception as exc:
+        _fail(f"Ring neighbours: {exc}")
+        traceback.print_exc()
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 14. Neighbour edge features
+# ──────────────────────────────────────────────────────────────────────
+
+def test_neighbor_edges(builder, scene: dict):
+    """Test neighbour edge builders produce correct shapes and masking."""
+    _header("14. Neighbour edge features")
+    from scene_verse.edge_predictor import SceneVerseEdgePredictorService as SVService
+    try:
+        E, M = scene["E"], scene["M"]
+        positions = scene["positions"]
+        sizes = scene["sizes"]
+        object_ids = scene["object_ids"]
+        active = scene["active"]
+        goal_idxs = scene["goal_idxs"]
+        bbq_center = torch.tensor([0.0, 0.0, 0.0], device=scene["device"])
+
+        ring = builder.compute_ring_neighbor_indices(positions, active, goal_idxs)
+
+        # BBQ neighbour edges
+        bbq_nbr = builder.build_bbq_neighbor_edge_features(
+            positions, object_ids, active, bbq_center, ring,
+        )
+        assert bbq_nbr.shape == (E, M, 6), f"BBQ nbr shape {list(bbq_nbr.shape)}"
+        _ok(f"BBQ neighbour edges {list(bbq_nbr.shape)} ✓")
+
+        # VL-SAT neighbour edges (no predictor)
+        vlsat_nbr = builder.build_vlsat_neighbor_edge_features(
+            positions, sizes, object_ids, active, ring, predictor=None,
+        )
+        assert vlsat_nbr.shape == (E, M, 6)
+        _ok(f"VL-SAT neighbour edges {list(vlsat_nbr.shape)} ✓")
+
+        # SV neighbour edges
+        sv_pred = SVService()
+        sv_nbr = builder.build_sceneverse_neighbor_edge_features(
+            positions, sizes, object_ids, active, ring,
+            predictor=sv_pred, names=scene["names"],
+        )
+        assert sv_nbr.shape == (E, M, 6)
+        _ok(f"SV neighbour edges {list(sv_nbr.shape)} ✓")
+
+        # Parent neighbour edges
+        raw_parents = torch.full((E, M), -1, dtype=torch.long, device=scene["device"])
+        levels = torch.zeros(E, M, 1, device=scene["device"])
+        colors = torch.rand(E, M, 3, device=scene["device"])
+        parent_nbr = builder.build_parent_neighbor_edge_features(
+            positions, levels, colors, object_ids, ring,
+        )
+        assert parent_nbr.shape == (E, M, 6)
+        _ok(f"Parent neighbour edges {list(parent_nbr.shape)} ✓")
+
+        # Goal object should have edge_exists=0 in ALL neighbour types
+        gi = goal_idxs[0].item()
+        for name, t in [("BBQ", bbq_nbr), ("VL-SAT", vlsat_nbr), ("SV", sv_nbr), ("Parent", parent_nbr)]:
+            assert t[0, gi, 0].item() < 0.5, f"{name}: goal has nbr edge_exists=1"
+        _ok("Goal has nbr_edge_exists=0 in all types ✓")
+
+        # Combine works
+        combined = builder.combine_enabled_edge_features([bbq_nbr, sv_nbr])
+        assert combined.shape == (E, M, 6)
+        _ok(f"Combined neighbour edges {list(combined.shape)} ✓")
+
+        _ok("Neighbour edge features PASSED")
+        return True
+    except Exception as exc:
+        _fail(f"Neighbour edges: {exc}")
+        traceback.print_exc()
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 15. Encode + Decode round-trip
+# ──────────────────────────────────────────────────────────────────────
+
+def test_encode_decode(builder, scene: dict):
+    """Simulate encode_scene_graph + decode_scene_embedding round-trip (D=30)."""
+    _header("15. Encode + Decode round-trip (D=30, ring neighbour edges)")
+    try:
+        E, M = scene["E"], scene["M"]
+        device = scene["device"]
+        positions = scene["positions"]
+        sizes = scene["sizes"]
+        object_ids = scene["object_ids"]
+        active = scene["active"]
+        goal_idxs = scene["goal_idxs"]
+        names = scene["names"]
+        D = 30
+
+        # ---- 1) Build node_features ----
+        radii = torch.norm(sizes, dim=-1, keepdim=True) / 2.0
+        colors = torch.rand(E, M, 3, device=device)
+        raw_parents = torch.full((E, M), -1, dtype=torch.long, device=device)
+        levels = torch.zeros(E, M, 1, device=device)
+
+        node_feats = builder.build_node_features(
+            positions, sizes, radii, colors, object_ids, active, raw_parents, levels
+        )  # [E, M, 14]
+
+        # ---- 2) Build goal edge_features (SV as example) ----
+        from scene_verse.edge_predictor import SceneVerseEdgePredictorService as SVService
+        sv_pred = SVService()
+
+        goal_edge_feats = builder.build_sceneverse_edge_features(
+            positions, sizes, object_ids, active, goal_idxs,
+            predictor=sv_pred, names=names,
+        )  # [E, M, 6]
+
+        # ---- 2b) Build ring neighbour indices + neighbour edges ----
+        ring_nbr = builder.compute_ring_neighbor_indices(positions, active, goal_idxs)  # [E, M]
+        _ok(f"Ring neighbour indices computed, shape {list(ring_nbr.shape)}")
+
+        # Verify ring properties
+        for e in range(E):
+            gi = goal_idxs[e].item()
+            assert ring_nbr[e, gi].item() == -1, f"Goal should have no ring neighbour"
+            active_non_goal = [(j, ring_nbr[e, j].item()) for j in range(M)
+                               if active[e, j, 0] > 0.5 and j != gi]
+            nbr_set = set()
+            for j, n in active_non_goal:
+                if n >= 0:
+                    nbr_set.add(n)
+            # Every active non-goal should appear as someone's neighbour (ring)
+            active_ng_set = set(j for j, _ in active_non_goal)
+            if len(active_ng_set) >= 2:
+                assert nbr_set == active_ng_set, f"Ring not closed: nbr_set={nbr_set} vs active={active_ng_set}"
+        _ok("Ring is closed and goal excluded ✓")
+
+        nbr_edge_feats = builder.build_sceneverse_neighbor_edge_features(
+            positions, sizes, object_ids, active, ring_nbr,
+            predictor=sv_pred, names=names,
+        )  # [E, M, 6]
+
+        _ok(f"node_feats {list(node_feats.shape)}, goal_edge {list(goal_edge_feats.shape)}, "
+            f"nbr_edge {list(nbr_edge_feats.shape)}")
+
+        # ---- 3) Codebook (simplified) ----
+        codebook_path = os.path.join(ALOHA_NAV_DIR, "cdecode_dict.json")
+        import json
+        with open(codebook_path) as f:
+            codebook = json.load(f)
+        name_map = codebook.get("names", {})
+        color_map = codebook.get("colors", {})
+
+        name_idx = torch.zeros(M, 1, device=device)
+        color_idx = torch.zeros(M, 1, device=device)
+        for j in range(M):
+            base_name = names[j].split("_", 1)[0].lower()
+            name_idx[j, 0] = float(int(name_map.get(base_name, 0)))
+            color_idx[j, 0] = 0.0  # simplified
+
+        name_b = name_idx.view(1, M, 1).expand(E, -1, -1)
+        color_b = color_idx.view(1, M, 1).expand(E, -1, -1)
+        pad_b = torch.zeros(E, M, 2, device=device)
+
+        per_obj = torch.cat([node_feats, goal_edge_feats, nbr_edge_feats, name_b, color_b, pad_b], dim=-1)
+        assert per_obj.shape == (E, M, D), f"Expected [E,M,{D}], got {per_obj.shape}"
+        _ok(f"per_object_feats shape {list(per_obj.shape)}")
+
+        # ---- 4) Reorder by goal ----
+        g = goal_idxs.long().clamp(0, M - 1)
+        base = torch.arange(M, device=device).view(1, M).expand(E, M)
+        order = (base + g.view(E, 1)) % M
+        reordered = per_obj.gather(1, order.unsqueeze(-1).expand(-1, -1, D))
+
+        # Verify goal is at slot 0
+        for e in range(E):
+            slot0_id = reordered[e, 0, 10].item()  # obj_id at slot 0
+            goal_id = object_ids[e, goal_idxs[e].long().item()].item()
+            if abs(slot0_id - goal_id) > 0.01:
+                _fail(f"Env {e}: slot 0 obj_id={slot0_id} != goal obj_id={goal_id}")
+                return False
+        _ok("Goal correctly placed at slot 0 after reorder")
+
+        # ---- 5) Flatten ----
+        flat = reordered.reshape(E, -1)
+        assert flat.shape == (E, M * D)
+        _ok(f"Flattened shape {list(flat.shape)}")
+
+        # ---- 6) Decode back ----
+        row = flat[0].view(M, D).cpu()
+        _info("Decoded slot 0 (GOAL):")
+        f = row[0]
+        print(f"    pos=({f[0]:.2f},{f[1]:.2f},{f[2]:.2f})  "
+              f"obj_id={f[10]:.0f}  active={f[11]:.0f}  "
+              f"goal_edge_exists={f[14]:.0f}  nbr_edge_exists={f[20]:.0f}  "
+              f"name_code={f[26]:.0f}")
+
+        _info("All slots (env 0):")
+        print(f"    {'Slot':>4}  {'ID':>4}  {'Act':>3}  "
+              f"{'GEdge':>5}  {'GRel':>4}  {'GDist':>6}  "
+              f"{'NEdge':>5}  {'NRel':>4}  {'NDist':>6}  {'NameCode':>8}")
+        for j in range(M):
+            f = row[j]
+            print(f"    {j:>4}  {f[10]:>4.0f}  {f[11]:>3.0f}  "
+                  f"{f[14]:>5.0f}  {f[15]:>4.0f}  {f[18]:>6.2f}  "
+                  f"{f[20]:>5.0f}  {f[21]:>4.0f}  {f[24]:>6.2f}  {f[26]:>8.0f}")
+
+        # ---- 7) Verify edge_exists=0 for goal slot ----
+        goal_gedge = row[0, 14].item()
+        goal_nedge = row[0, 20].item()
+        if goal_gedge > 0.5:
+            _fail("Goal slot has goal_edge_exists=1 (should be 0)")
+            return False
+        if goal_nedge > 0.5:
+            _fail("Goal slot has nbr_edge_exists=1 (should be 0)")
+            return False
+        _ok("Goal slot correctly has both edge_exists=0")
+
+        # ---- 8) Verify neighbour edges exist for non-goal active objects ----
+        num_nbr_edges = sum(1 for j in range(1, M) if row[j, 20].item() > 0.5 and row[j, 11].item() > 0.5)
+        num_active_nongol = sum(1 for j in range(1, M) if row[j, 11].item() > 0.5)
+        if num_active_nongol >= 2:
+            if num_nbr_edges < 2:
+                _fail(f"Expected ≥2 neighbour edges but got {num_nbr_edges}")
+                return False
+            _ok(f"{num_nbr_edges}/{num_active_nongol} active non-goal objects have neighbour edges")
+        else:
+            _ok(f"Only {num_active_nongol} active non-goal → ring not formed (expected)")
+
+        # ---- 9) Verify no NaN/Inf ----
+        if torch.isnan(flat).any() or torch.isinf(flat).any():
+            _fail("NaN or Inf in flattened embedding!")
+            return False
+        _ok("No NaN/Inf in final embedding")
+
+        _ok("Encode/Decode round-trip PASSED (D=30)")
+        return True
+    except Exception as exc:
+        _fail(f"Encode/Decode: {exc}")
+        traceback.print_exc()
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────
 # MAIN
 # ──────────────────────────────────────────────────────────────────────
 
@@ -801,6 +1095,18 @@ def main():
 
     test_different_goals(builder, scene)
     results["Diff goals"] = True
+
+    # --- Test 13: ring neighbour indices ---
+    ring_ok = test_ring_neighbors(builder, scene)
+    results["Ring neighbours"] = ring_ok if ring_ok is not None else False
+
+    # --- Test 14: neighbour edge features ---
+    nbr_ok = test_neighbor_edges(builder, scene)
+    results["Nbr edges"] = nbr_ok if nbr_ok is not None else False
+
+    # --- Test 15: encode + decode round-trip ---
+    enc_ok = test_encode_decode(builder, scene)
+    results["Encode/Decode"] = enc_ok if enc_ok is not None else False
 
     # --- Summary ---
     _header("SUMMARY")
