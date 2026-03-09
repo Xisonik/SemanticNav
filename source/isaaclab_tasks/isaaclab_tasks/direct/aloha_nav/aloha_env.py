@@ -366,6 +366,7 @@ class WheeledRobotEnv(DirectRLEnv):
             # Переводим в float и нормализуем для CLIP
             imgs = camera_data.to(device=self.device, dtype=torch.float32, non_blocking=True) / 255.0
             imgs = imgs.permute(0, 3, 1, 2)  # (N, 3, H, W)
+            first_img_2 = imgs[0]
             inputs = self.clip_processor(images=imgs, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             with torch.no_grad():
@@ -378,9 +379,14 @@ class WheeledRobotEnv(DirectRLEnv):
             save_path = os.path.join("/home/xiso/Downloads/delete", f"processed_rgb_{0}.png")
             
             # Преобразуем в формат OpenCV (HWC, uint8)
-            first_img_cv = (first_img.cpu().numpy() * 255).astype(np.uint8)  # если нужно нормализовать обратно
+            first_img_cv = (first_img.cpu().numpy()).astype(np.uint8)  # если нужно нормализовать обратно
             cv2.imwrite(save_path, cv2.cvtColor(first_img_cv, cv2.COLOR_RGB2BGR))  # OpenCV использует BGR
             print(f"Saved processed RGB image to {save_path}")
+            # Преобразуем в формат OpenCV (HWC, uint8)
+            save_path = os.path.join("/home/xiso/Downloads/delete", f"processed_rgb_{1}.png")
+            first_img_cv = (first_img_2.cpu().numpy() * 255).astype(np.uint8)  # если нужно нормализовать обратно
+            cv2.imwrite(save_path, cv2.cvtColor(first_img_cv, cv2.COLOR_RGB2BGR))  # OpenCV использует BGR
+            print(f"Saved processed RGB 2 image to {save_path}")
         # Получение скоростей робота
         root_lin_vel_w = torch.norm(self._robot.data.root_lin_vel_w[:, :2], dim=1).unsqueeze(-1)
         root_ang_vel_w = self._robot.data.root_ang_vel_w[:, 2].unsqueeze(-1)
