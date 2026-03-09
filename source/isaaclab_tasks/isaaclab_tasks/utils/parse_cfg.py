@@ -115,7 +115,7 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
 
 
 def parse_env_cfg(
-    task_name: str, controller: bool, imitation: bool, curriculum: bool,
+    task_name: str, controller=False, imitation=False, curriculum=False,
     device: str = "cuda:0", num_envs: int | None = None, use_fabric: bool | None = None, 
 ) -> ManagerBasedRLEnvCfg | DirectRLEnvCfg:
     """Parse configuration for an environment and override based on inputs.

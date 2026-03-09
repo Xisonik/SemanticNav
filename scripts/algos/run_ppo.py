@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
-from scripts.algos.ppo.helper import RolloutVideoWrapper
-from scripts.algos.ppo.networks import Policy, Value, GraphEncoder
-from scripts.algos.networks.networks_gt import DictRunningStandardScaler
+from networks.ppo import PPO, PPO_DEFAULT_CONFIG
+from ppo.helper import RolloutVideoWrapper
+from ppo.networks import Policy, Value, GraphEncoder
+from networks.networks_gt import DictRunningStandardScaler
 from skrl.envs.loaders.torch import load_isaaclab_env
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.memories.torch import RandomMemory
@@ -41,9 +41,9 @@ cli_args = ["--enable_cameras"]
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
 experiment = start(
-    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
-    project_name="robo",
-    workspace="denmanorwat"
+    api_key="DRYfW6B6VtUQr9llvf3jup57R",
+    project_name="general",
+    workspace="xisonik"
 )
 
 if EVAL:

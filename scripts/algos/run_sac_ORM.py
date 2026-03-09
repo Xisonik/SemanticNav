@@ -10,6 +10,7 @@ from skrl.memories.torch import RandomMemory
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
+from ppo.helper import RolloutVideoWrapper
 
 from networks.networks_orm_memory import *
 set_seed(42)
@@ -26,13 +27,23 @@ set_seed(42)
     headless=True,
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
+
+from comet_ml import start
+from comet_ml.integration.pytorch import log_model
+experiment = start(
+    api_key="DRYfW6B6VtUQr9llvf3jup57R",
+    project_name="general",
+    workspace="xisonik"
+)
+
+
 TASK_NAME = "Aloha_nav"
 EVAL = False
 VIDEO = False
 LIVESTREAM = False
 USE_PRETRAINED = False
 
-num_envs = 128
+num_envs = 4
 timestepslen = 10000000
 headless = True
 
@@ -67,6 +78,7 @@ else:
         num_envs=num_envs,
         cli_args=cli_args
     )
+env = RolloutVideoWrapper(env, experiment, episode_frequency=10)
 
 if VIDEO:
     env = RecordVideo(
@@ -174,13 +186,6 @@ aux_trainer = AuxModuleTrainer(
     log_interval=1000,
 )
 
-from comet_ml import start
-from comet_ml.integration.pytorch import log_model
-experiment = start(
-    api_key="DRYfW6B6VtUQr9llvf3jup57R",
-    project_name="general",
-    workspace="xisonik"
-)
 _original_post = agent.post_interaction
 mode_1 = False
 def _post_with_aux(timestep, timesteps):

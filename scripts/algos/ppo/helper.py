@@ -52,5 +52,6 @@ class RolloutVideoWrapper(gymnasium.Wrapper):
                 step=self.current_episode,
                 format="mp4"
             )
+            print("video logged")
             self.video_buffer = []
             os.remove(video_path)

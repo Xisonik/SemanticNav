@@ -138,13 +138,13 @@ def load_isaaclab_env(
         "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
     )
     parser.add_argument(
-        "--controller", action=argparse.BooleanOptionalAction, default=True, help="Whether to use the controller for the task (if available)."
+        "--controller", action=argparse.BooleanOptionalAction, default=False, help="Whether to use the controller for the task (if available)."
     )
     parser.add_argument(
         "--imitation", action=argparse.BooleanOptionalAction, default=False, help="Whether to use imitation learning for the task (if available)."
     )
     parser.add_argument(
-        "--curriculum", action=argparse.BooleanOptionalAction, default=True, help="Whether to use curriculum learning for the task (if available)."
+        "--curriculum", action=argparse.BooleanOptionalAction, default=False, help="Whether to use curriculum learning for the task (if available)."
     )
 
     # launch the simulation app
@@ -168,7 +168,7 @@ def load_isaaclab_env(
         import isaaclab_tasks  # type: ignore
         from isaaclab_tasks.utils import parse_env_cfg  # type: ignore
 
-    cfg = parse_env_cfg(args.task, controller = args.controller, imitation = args.imitation, curriculum = args.curriculum,
+    cfg = parse_env_cfg(args.task, controller = False, imitation = False, curriculum = False,
                         device = args.device, num_envs = args.num_envs, use_fabric = not args.disable_fabric)
 
     # print config

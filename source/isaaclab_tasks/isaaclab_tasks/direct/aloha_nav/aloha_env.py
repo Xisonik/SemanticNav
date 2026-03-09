@@ -352,21 +352,35 @@ class WheeledRobotEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
     def _get_observations(self) -> dict:
+        
         self.tensorboard_step += 1
         self.cur_step += 1
         self.episode_lengths += 1
         # Получение RGB изображений с камеры
         if self.CAMERA:
-            camera_data = self._tiled_camera.data.output["rgb"].clone()  # Shape: (num_envs, 224, 224, 3)
+            camera_data = self._tiled_camera.data.output["rgb"].clone()  # (num_envs, 224, 224, 3)
 
+            # берем только первую среду
+            first_img = camera_data[0]  # (224, 224, 3)
+
+            # Переводим в float и нормализуем для CLIP
             imgs = camera_data.to(device=self.device, dtype=torch.float32, non_blocking=True) / 255.0
-            imgs = imgs.permute(0, 3, 1, 2)                                # (N, 3, H, W)
+            imgs = imgs.permute(0, 3, 1, 2)  # (N, 3, H, W)
             inputs = self.clip_processor(images=imgs, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
             with torch.no_grad():
-                image_embeddings = self.clip_model.get_image_features(**inputs)  # (N, D)
+                image_embeddings = self.clip_model.get_image_features(**inputs)
                 image_embeddings = image_embeddings / (image_embeddings.norm(dim=1, keepdim=True) + 1e-9)
-        
+
+            # --- Сохраняем первую среду ---
+            import cv2
+            import numpy as np
+            save_path = os.path.join("/home/xiso/Downloads/delete", f"processed_rgb_{0}.png")
+            
+            # Преобразуем в формат OpenCV (HWC, uint8)
+            first_img_cv = (first_img.cpu().numpy() * 255).astype(np.uint8)  # если нужно нормализовать обратно
+            cv2.imwrite(save_path, cv2.cvtColor(first_img_cv, cv2.COLOR_RGB2BGR))  # OpenCV использует BGR
+            print(f"Saved processed RGB image to {save_path}")
         # Получение скоростей робота
         root_lin_vel_w = torch.norm(self._robot.data.root_lin_vel_w[:, :2], dim=1).unsqueeze(-1)
         root_ang_vel_w = self._robot.data.root_ang_vel_w[:, 2].unsqueeze(-1)
