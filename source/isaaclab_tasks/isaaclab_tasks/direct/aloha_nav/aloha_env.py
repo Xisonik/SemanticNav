@@ -127,7 +127,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
     )
     contact_sensor = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",
-        update_period=0.05,
+        update_period=0.1,
         history_length=3,
         debug_vis=False,
         filter_prim_paths_expr=["/World/envs/env_.*"], #/obstacles/.*
@@ -648,7 +648,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # вычисляем модуль силы для каждого контакта
         if force_matrix is not None and force_matrix.numel() > 0:
             contact_forces = torch.norm(force_matrix, dim=-1)
-            num_contacts_per_env = torch.sum(contact_forces > 0.02, dim=1)
+            num_contacts_per_env = torch.sum(contact_forces > 0.05, dim=1)
             high_contact_envs = num_contacts_per_env >= 1
         else:
             print("force_matrix_w is None or empty")
