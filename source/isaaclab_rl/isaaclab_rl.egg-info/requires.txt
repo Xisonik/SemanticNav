@@ -9,13 +9,13 @@ moviepy
 pillow==11.2.1
 
 [all]
-skrl>=1.4.2
-gym
-tqdm
-stable-baselines3>=2.6
 rsl-rl-lib==2.3.3
 rl-games==1.6.1
 rich
+stable-baselines3>=2.6
+gym
+tqdm
+skrl>=1.4.2
 
 [rl-games]
 rl-games==1.6.1

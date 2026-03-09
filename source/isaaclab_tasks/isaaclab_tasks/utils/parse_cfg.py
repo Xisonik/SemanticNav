@@ -115,7 +115,8 @@ def load_cfg_from_registry(task_name: str, entry_point_key: str) -> dict | objec
 
 
 def parse_env_cfg(
-    task_name: str, device: str = "cuda:0", num_envs: int | None = None, use_fabric: bool | None = None
+    task_name: str, controller: bool, imitation: bool, curriculum: bool,
+    device: str = "cuda:0", num_envs: int | None = None, use_fabric: bool | None = None, 
 ) -> ManagerBasedRLEnvCfg | DirectRLEnvCfg:
     """Parse configuration for an environment and override based on inputs.
 
@@ -142,6 +143,9 @@ def parse_env_cfg(
     if isinstance(cfg, dict):
         raise RuntimeError(f"Configuration for the task: '{task_name}' is not a class. Please provide a class.")
 
+    cfg.controller = controller
+    cfg.imitation = imitation
+    cfg.curriculum = curriculum
     # simulation device
     cfg.sim.device = device
     # disable fabric to read/write through USD

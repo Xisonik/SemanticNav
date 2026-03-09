@@ -1,8 +1,10 @@
 from typing import Any, Mapping, Optional, Tuple, Union
+from comet_ml import Experiment
 
 import copy
 import itertools
 import gymnasium
+import numpy as np
 from packaging import version
 
 import torch
@@ -79,6 +81,7 @@ class PPO(Agent):
         action_space: Optional[Union[int, Tuple[int], gymnasium.Space]] = None,
         device: Optional[Union[str, torch.device]] = None,
         cfg: Optional[dict] = None,
+        comet_experiment: Optional[Experiment] = None
     ) -> None:
         _cfg = copy.deepcopy(PPO_DEFAULT_CONFIG)
         _cfg.update(cfg if cfg is not None else {})
@@ -90,6 +93,7 @@ class PPO(Agent):
             device=device,
             cfg=_cfg,
         )
+        self.experiment: Optional[Experiment] = comet_experiment
 
         # models
         self.policy = self.models.get("policy", None)
@@ -283,6 +287,16 @@ class PPO(Agent):
         # write tracking data and checkpoints
         super().post_interaction(timestep, timesteps)
 
+    def write_tracking_data(self, timestep: int, timesteps: int):
+        for k, v in self.tracking_data.items():
+            if k.endswith("(min)"):
+                self.experiment.log_metrics({k: np.min(v)}, step = timestep)
+            elif k.endswith("(max)"):
+                self.experiment.log_metrics({k: np.max(v)}, step = timestep)
+            else:
+                self.experiment.log_metrics({k: np.mean(v)}, step = timestep)
+        super().write_tracking_data(timestep = timestep, timesteps = timesteps)
+
     def _update(self, timestep: int, timesteps: int) -> None:
         """Algorithm's main update step with auxiliary loss support"""
 
@@ -344,8 +358,8 @@ class PPO(Agent):
         cumulative_entropy_loss = 0
         cumulative_value_loss = 0
         cumulative_orientation_loss = 0  # НОВОЕ
-        cumulative_orientation_accuracy = 0  # НОВОЕ
-
+        cumulative_orientation_accuracy = 0
+        kl_div_metric, clip_metric, gradclip_metric = [], [], []
         # learning epochs
         for epoch in range(self._learning_epochs):
             kl_divergences = []
@@ -373,6 +387,7 @@ class PPO(Agent):
                     with torch.no_grad():
                         ratio = next_log_prob - sampled_log_prob
                         kl_divergence = ((torch.exp(ratio) - 1) - ratio).mean()
+                        kl_div_metric.append(kl_divergence)
                         kl_divergences.append(kl_divergence)
 
                     # early stopping with KL divergence
@@ -391,12 +406,13 @@ class PPO(Agent):
                     surrogate_clipped = sampled_advantages * torch.clip(
                         ratio, 1.0 - self._ratio_clip, 1.0 + self._ratio_clip
                     )
+                    clip_metric.append((torch.abs(ratio - 1.0) > self._ratio_clip).float().mean())
 
                     policy_loss = -torch.min(surrogate, surrogate_clipped).mean()
 
                     # compute value loss + ORIENTATION LOSS
                     predicted_values, _, orient_outputs = self.value.act({"states": sampled_states}, role="value")
-#                   Правильно распаковывает 3 значения (values, log_prob, outputs)
+                    # Правильно распаковывает 3 значения (values, log_prob, outputs)
                     if self._clip_predicted_values:
                         predicted_values = sampled_values + torch.clip(
                             predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
@@ -412,22 +428,6 @@ class PPO(Agent):
                         if 'orientation_accuracy' in orient_outputs:
                             cumulative_orientation_accuracy += orient_outputs['orientation_accuracy'].item()
 
-                # Total loss
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-
-                # print("value and or: ", policy_loss, value_loss, orientation_loss)
                 total_loss = policy_loss + entropy_loss + value_loss + orientation_loss
 
                 # optimization step
@@ -444,9 +444,10 @@ class PPO(Agent):
                     if self.policy is self.value:
                         nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
                     else:
-                        nn.utils.clip_grad_norm_(
+                        grad = nn.utils.clip_grad_norm_(
                             itertools.chain(self.policy.parameters(), self.value.parameters()), self._grad_norm_clip
                         )
+                        gradclip_metric.append(grad)
 
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
@@ -472,16 +473,14 @@ class PPO(Agent):
 
         # record data
         total_updates = self._learning_epochs * self._mini_batches
-        self.track_data("Loss / Policy loss", cumulative_policy_loss / total_updates)
-        self.track_data("Loss / Value loss", cumulative_value_loss / total_updates)
+        self.track_data("Training/Policy_loss", cumulative_policy_loss / total_updates)
+        self.track_data("Training/Value_loss", cumulative_value_loss / total_updates)
+        self.track_data('Training/KL_div', torch.tensor(kl_divergences).mean().item())
+        self.track_data('Training/Clip_fraction', torch.tensor(clip_metric).mean().item())
+        self.track_data('Training/Grad_norm', torch.tensor(gradclip_metric).mean().item())
         if self._entropy_loss_scale:
             self.track_data("Loss / Entropy loss", cumulative_entropy_loss / total_updates)
         
-        # НОВОЕ: Track orientation metrics
-        if cumulative_orientation_loss > 0:
-            self.track_data("Localization / Orientation Loss", cumulative_orientation_loss / total_updates)
-        if cumulative_orientation_accuracy > 0:
-            self.track_data("Localization / Orientation Accuracy", cumulative_orientation_accuracy / total_updates)
 
         self.track_data("Policy / Standard deviation", self.policy.distribution(role="policy").stddev.mean().item())
 

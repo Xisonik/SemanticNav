@@ -157,12 +157,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.random_actions = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
-        self.CL_ON = True
+        self.CL_ON = cfg.curriculum
         self.stage = 0
         self.use_staff = True
         self.use_obstacles = True
-        self.use_controller = True
-        self.imitation = False
+        self.use_controller = cfg.controller
+        self.imitation = cfg.imitation
         
         self.turn_on_obstacles = False
         self.turn_on_obstacles_always = False
@@ -554,15 +554,13 @@ class WheeledRobotEnv(DirectRLEnv):
         self.previous_angle_error = a_error
 
         has_contact = self.get_contact()
-        time_out = self.is_time_out(self.my_episode_lenght-1)
 
         progress = self.previous_distance_error - r_error  # >0 если ближе к цели
         turnes = gamma * progress
         collision_penalty = -2.0 * has_contact.float()
-        timeout_penalty = -2.0 * time_out.float()
 
         goal_bonus = 6.0 * goal_reached.float()
-        reward = -0.01 + turnes + collision_penalty + timeout_penalty + goal_bonus
+        reward = -0.01 + turnes + collision_penalty + goal_bonus
 
         died, _ = self._get_dones(self.my_episode_lenght - 1, inner=True)
         if torch.any(died):
@@ -722,7 +720,7 @@ class WheeledRobotEnv(DirectRLEnv):
         """
         time_out = self.is_time_out(my_episode_lenght)
         
-        died = self.goal_reached() | self.get_contact() | self.out_of_bounds() | time_out
+        died = self.goal_reached() | self.get_contact() | self.out_of_bounds()
 
         if not inner:
             self.episode_length_buf[died] = 0
@@ -1121,6 +1119,11 @@ class WheeledRobotEnv(DirectRLEnv):
         handler = BreakpointWarningHandler(self)
         omni_logger.addHandler(handler)
         omni_logger.setLevel(logging.WARNING)
+
+    def render(self):
+        assert self.CAMERA, "Render is only available when CAMERA mode is enabled."
+        camera_data = self._tiled_camera.data.output["rgb"].clone()  # Shape: (num_envs, 224, 224, 3)
+        return camera_data.permute(0, 3, 1, 2)
 
 
 # ============================================================================
