@@ -36,13 +36,13 @@ Requires-Dist: gym; extra == "rl-games"
 Provides-Extra: rsl-rl
 Requires-Dist: rsl-rl-lib==2.3.3; extra == "rsl-rl"
 Provides-Extra: all
-Requires-Dist: skrl>=1.4.2; extra == "all"
-Requires-Dist: gym; extra == "all"
-Requires-Dist: tqdm; extra == "all"
-Requires-Dist: stable-baselines3>=2.6; extra == "all"
 Requires-Dist: rsl-rl-lib==2.3.3; extra == "all"
 Requires-Dist: rl-games==1.6.1; extra == "all"
 Requires-Dist: rich; extra == "all"
+Requires-Dist: stable-baselines3>=2.6; extra == "all"
+Requires-Dist: gym; extra == "all"
+Requires-Dist: tqdm; extra == "all"
+Requires-Dist: skrl>=1.4.2; extra == "all"
 Dynamic: author
 Dynamic: classifier
 Dynamic: home-page

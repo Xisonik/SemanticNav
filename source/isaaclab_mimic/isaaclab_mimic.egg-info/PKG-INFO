@@ -14,9 +14,9 @@ Requires-Python: >=3.10
 Requires-Dist: tomli
 Requires-Dist: ipywidgets==8.1.5
 Provides-Extra: robomimic
-Requires-Dist: robomimic@ git+https://github.com/ARISE-Initiative/robomimic.git@v0.4.0 ; extra == "robomimic"
+Requires-Dist: robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git@v0.4.0 ; extra == "robomimic"
 Provides-Extra: all
-Requires-Dist: robomimic@ git+https://github.com/ARISE-Initiative/robomimic.git@v0.4.0 ; extra == "all"
+Requires-Dist: robomimic @ git+https://github.com/ARISE-Initiative/robomimic.git@v0.4.0 ; extra == "all"
 Dynamic: author
 Dynamic: classifier
 Dynamic: home-page
