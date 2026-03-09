@@ -129,13 +129,13 @@ cfg["gradient_steps"] = 1
 cfg["batch_size"] = 1024
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
-cfg["actor_learning_rate"] = 0 # 3e-4
-cfg["critic_learning_rate"] = 0 # 3e-4
+cfg["actor_learning_rate"] = 3e-4 # 3e-4
+cfg["critic_learning_rate"] = 3e-4 # 3e-4
 cfg["random_timesteps"] = 0
 cfg["learning_starts"] = 100
 cfg["grad_norm_clip"] = 0
 cfg["learn_entropy"] = True
-cfg["entropy_learning_rate"] = 0 # 5e-3
+cfg["entropy_learning_rate"] = 5e-3 # 5e-3
 cfg["initial_entropy_value"] = 1.0
 
 cfg["state_preprocessor"] = DictRunningStandardScaler

@@ -984,7 +984,7 @@ class SceneManager:
         goal_pos = self.goal_positions[env_ids]
                
         # Случайное размещение робота в пределах комнаты
-        range = 6
+        range = 5
         random_x = (torch.rand(num_envs, device=self.device)-0.5) *range
         random_y = (torch.rand(num_envs, device=self.device)-0.5) *range
         
