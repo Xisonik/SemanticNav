@@ -1,8 +1,10 @@
 from typing import Any, Mapping, Optional, Tuple, Union
+from comet_ml import Experiment
 
 import copy
 import itertools
 import gymnasium
+import numpy as np
 from packaging import version
 
 import torch
@@ -79,6 +81,7 @@ class PPO(Agent):
         action_space: Optional[Union[int, Tuple[int], gymnasium.Space]] = None,
         device: Optional[Union[str, torch.device]] = None,
         cfg: Optional[dict] = None,
+        comet_experiment: Optional[Experiment] = None
     ) -> None:
         _cfg = copy.deepcopy(PPO_DEFAULT_CONFIG)
         _cfg.update(cfg if cfg is not None else {})
@@ -90,6 +93,7 @@ class PPO(Agent):
             device=device,
             cfg=_cfg,
         )
+        self.experiment: Optional[Experiment] = comet_experiment
 
         # models
         self.policy = self.models.get("policy", None)
@@ -283,6 +287,16 @@ class PPO(Agent):
         # write tracking data and checkpoints
         super().post_interaction(timestep, timesteps)
 
+    def write_tracking_data(self, timestep: int, timesteps: int):
+        for k, v in self.tracking_data.items():
+            if k.endswith("(min)"):
+                self.experiment.log_metrics({k: np.min(v)}, step = timestep)
+            elif k.endswith("(max)"):
+                self.experiment.log_metrics({k: np.max(v)}, step = timestep)
+            else:
+                self.experiment.log_metrics({k: np.mean(v)}, step = timestep)
+        super().write_tracking_data(timestep = timestep, timesteps = timesteps)
+
     def _update(self, timestep: int, timesteps: int) -> None:
         """Algorithm's main update step with auxiliary loss support"""
 
@@ -396,7 +410,7 @@ class PPO(Agent):
 
                     # compute value loss + ORIENTATION LOSS
                     predicted_values, _, orient_outputs = self.value.act({"states": sampled_states}, role="value")
-#                   Правильно распаковывает 3 значения (values, log_prob, outputs)
+                    # Правильно распаковывает 3 значения (values, log_prob, outputs)
                     if self._clip_predicted_values:
                         predicted_values = sampled_values + torch.clip(
                             predicted_values - sampled_values, min=-self._value_clip, max=self._value_clip
@@ -412,22 +426,6 @@ class PPO(Agent):
                         if 'orientation_accuracy' in orient_outputs:
                             cumulative_orientation_accuracy += orient_outputs['orientation_accuracy'].item()
 
-                # Total loss
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-                # print("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-
-                # print("value and or: ", policy_loss, value_loss, orientation_loss)
                 total_loss = policy_loss + entropy_loss + value_loss + orientation_loss
 
                 # optimization step

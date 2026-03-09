@@ -32,6 +32,8 @@ import torch
 import math
 import random
 import json
+import os
+import sys
 from collections import defaultdict
 from tabulate import tabulate
 import importlib.util
@@ -48,10 +50,20 @@ def import_class_from_path(module_path, class_name):
     return class_obj
 
 module_path = "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/placement_strategies.py"
+graph_builder_module_path = "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/graph_builder.py"
+vl_sat_predictor_module_path = "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/vl_sat_model/predictor_service.py"
+SceneGraphBuilder = import_class_from_path(graph_builder_module_path, "SceneGraphBuilder")
+VLSATEdgePredictorService = import_class_from_path(vl_sat_predictor_module_path, "VLSATEdgePredictorService")
 PlacementStrategy = import_class_from_path(module_path, "PlacementStrategy")
 GridPlacement = import_class_from_path(module_path, "GridPlacement")
 GridPlacementWithOrientation = import_class_from_path(module_path, "GridPlacementWithOrientation")
 OnSurfacePlacement = import_class_from_path(module_path, "OnSurfacePlacement")
+
+# SceneVerse edge predictor (package with relative imports → add aloha_nav to path)
+_aloha_nav_dir = os.path.join(os.getcwd(), "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav")
+if _aloha_nav_dir not in sys.path:
+    sys.path.insert(0, _aloha_nav_dir)
+from scene_verse.edge_predictor import SceneVerseEdgePredictorService
 
 
 # =====================
@@ -110,11 +122,96 @@ class SceneGraph:
     """Вся графовая логика: наблюдения, отношения, промпты."""
     def __init__(self, manager: 'SceneManager'):
         self.m = manager
+        self.builder = manager.graph_builder
         self._dirty = True  # если нужна инвалидация кэшей в будущем
 
     def refresh(self):
         """Вызывается менеджером после изменений сцены. Сейчас ничего не кэшируем, но оставляем хук."""
         self._dirty = True
+
+    @torch.no_grad()
+    def _build_parent_edge_features(
+        self,
+        positions: torch.Tensor,
+        levels: torch.Tensor,
+        colors: torch.Tensor,
+        object_ids: torch.Tensor,
+        raw_parents: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.builder.build_parent_edge_features(positions, levels, colors, object_ids, raw_parents)
+
+    @staticmethod
+    @torch.no_grad()
+    def _safe_normalize(v: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        return SceneGraphBuilder.safe_normalize(v, eps=eps)
+
+    @torch.no_grad()
+    def _bbq_relative_components(
+        self,
+        target_pos: torch.Tensor,
+        anchor_pos: torch.Tensor,
+        center_point: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return self.builder.bbq_relative_components(target_pos, anchor_pos, center_point)
+
+    @torch.no_grad()
+    def _build_bbq_edge_features(
+        self,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        object_ids: torch.Tensor,
+        active: torch.Tensor,
+    ) -> torch.Tensor:
+        m = self.m
+        goal_idxs = m.active_goal_indices[env_ids]
+        return self.builder.build_bbq_edge_features(
+            positions,
+            object_ids,
+            active,
+            goal_idxs,
+            m.bbq_center_point,
+        )
+
+    @torch.no_grad()
+    def _build_bbq_edge_strings_from_features(self, edge_features: torch.Tensor) -> List[List[List[str]]]:
+        """
+        Decode BBQ edge channels into string relations.
+        Input edge format per object: [edge_exists, left_right, front_back, above_below, dist, id_diff]
+        Output: relations[e][j] -> list[str] for env e and object j.
+        """
+        return self.builder.decode_bbq_string_relations(edge_features)
+
+    @torch.no_grad()
+    def get_bbq_edge_string_relations(self, env_ids: Optional[torch.Tensor] = None) -> List[Dict[str, List[str]]]:
+        """
+        Returns string relations for BBQ edges as:
+        [
+          {"obj_name_0": ["left", "front"], "obj_name_1": ["below"], ...},
+          ... per env
+        ]
+        Relations are computed against the active goal object as anchor.
+        """
+        m = self.m
+        device = m.device
+        if env_ids is None:
+            env_ids = torch.arange(m.num_envs, device=device)
+
+        positions = m.positions[env_ids]
+        object_ids = m.object_ids.expand(len(env_ids), -1).unsqueeze(-1).float()
+        active = m.active[env_ids].unsqueeze(-1).float()
+
+        edge_features = self._build_bbq_edge_features(env_ids, positions, object_ids, active)
+        rel_lists = self._build_bbq_edge_strings_from_features(edge_features)
+
+        out: List[Dict[str, List[str]]] = []
+        names = m.names
+        for e in range(len(env_ids)):
+            env_dict: Dict[str, List[str]] = {}
+            for j, rels in enumerate(rel_lists[e]):
+                if rels:
+                    env_dict[names[j]] = rels
+            out.append(env_dict)
+        return out
 
     # ---------- Graph observation ----------
     @torch.no_grad()
@@ -144,40 +241,84 @@ class SceneGraph:
             dim=-1
         )  # (E, M, 14)
 
-        # --- edge features (используем СЫРЫЕ индексы, без деления) ---
-        edge_exists = (raw_parents >= 0).float().unsqueeze(-1)                     # (E, M, 1)
-        valid_mask  = (raw_parents >= 0)                                           # (E, M)
+        # --- ring neighbour indices (used for neighbour edges) ---
+        goal_idxs = m.active_goal_indices[env_ids]
+        ring_nbr = self.builder.compute_ring_neighbor_indices(positions, active, goal_idxs)  # [E, M]
 
-        z_diff = torch.zeros(E, m.num_total_objects, 1, device=device)
-        level_diff = torch.zeros_like(z_diff)
-        dist = torch.zeros_like(z_diff)
-        color_diff_norm = torch.zeros_like(z_diff)
-        id_diff = torch.zeros_like(z_diff)
+        if m.bbq_edge or m.vl_sat_edge or m.sv_edge:
+            enabled_edges: List[torch.Tensor] = []
+            enabled_nbr_edges: List[torch.Tensor] = []
 
-        if valid_mask.any():
-            batch_idx = torch.arange(E, device=device)[:, None].expand(-1, m.num_total_objects)[valid_mask]
-            obj_idx   = torch.arange(m.num_total_objects, device=device)[None, :].expand(E, -1)[valid_mask]
-            parent_idx= raw_parents[valid_mask].long()
+            if m.bbq_edge:
+                bbq_edges = self.builder.build_bbq_edge_features(
+                    positions,
+                    object_ids,
+                    active,
+                    goal_idxs,
+                    m.bbq_center_point,
+                )
+                enabled_edges.append(bbq_edges)
+                m.last_bbq_edge_string_relations = self._build_bbq_edge_strings_from_features(bbq_edges)
 
-            # z diff
-            z_diff[valid_mask] = positions[batch_idx, obj_idx, 2:3] - positions[batch_idx, parent_idx, 2:3]
-            # level diff
-            level_diff[valid_mask] = levels[batch_idx, obj_idx] - levels[batch_idx, parent_idx]
-            # xy distance
-            child_xy  = positions[batch_idx, obj_idx, :2]
-            parent_xy = positions[batch_idx, parent_idx, :2]
-            dist[valid_mask] = torch.norm(child_xy - parent_xy, dim=-1, keepdim=True)
-            # color diff
-            child_color  = colors[batch_idx, obj_idx]
-            parent_color = colors[batch_idx, parent_idx]
-            color_diff_norm[valid_mask] = torch.norm(child_color - parent_color, dim=-1, keepdim=True)
-            # id diff
-            child_id  = object_ids[batch_idx, obj_idx]
-            parent_id = object_ids[batch_idx, parent_idx]
-            id_diff[valid_mask] = child_id - parent_id
+                enabled_nbr_edges.append(
+                    self.builder.build_bbq_neighbor_edge_features(
+                        positions, object_ids, active, m.bbq_center_point, ring_nbr,
+                    )
+                )
+            else:
+                m.last_bbq_edge_string_relations = None
 
-        edge_features = torch.cat([edge_exists, z_diff, level_diff, dist, color_diff_norm, id_diff], dim=-1)  # (E, M, 6)
-        return {"node_features": node_features, "edge_features": edge_features}
+            if m.vl_sat_edge:
+                enabled_edges.append(
+                    self.builder.build_vlsat_edge_features(
+                        positions,
+                        sizes,
+                        object_ids,
+                        active,
+                        goal_idxs,
+                        predictor=m.vl_sat_predictor,
+                    )
+                )
+                enabled_nbr_edges.append(
+                    self.builder.build_vlsat_neighbor_edge_features(
+                        positions, sizes, object_ids, active, ring_nbr,
+                        predictor=m.vl_sat_predictor,
+                    )
+                )
+
+            if m.sv_edge:
+                enabled_edges.append(
+                    self.builder.build_sceneverse_edge_features(
+                        positions,
+                        sizes,
+                        object_ids,
+                        active,
+                        goal_idxs,
+                        predictor=m.sv_predictor,
+                        names=m.names,
+                    )
+                )
+                enabled_nbr_edges.append(
+                    self.builder.build_sceneverse_neighbor_edge_features(
+                        positions, sizes, object_ids, active, ring_nbr,
+                        predictor=m.sv_predictor, names=m.names,
+                    )
+                )
+
+            edge_features = self.builder.combine_enabled_edge_features(enabled_edges)
+            neighbor_edge_features = self.builder.combine_enabled_edge_features(enabled_nbr_edges)
+        else:
+            edge_features = self._build_parent_edge_features(positions, levels, colors, object_ids, raw_parents)
+            neighbor_edge_features = self.builder.build_parent_neighbor_edge_features(
+                positions, levels, colors, object_ids, ring_nbr,
+            )
+            m.last_bbq_edge_string_relations = None
+
+        return {
+            "node_features": node_features,
+            "edge_features": edge_features,
+            "neighbor_edge_features": neighbor_edge_features,
+        }
 
 
     # ---------- Spatial relations ----------
@@ -374,8 +515,60 @@ class SceneManager:
             raw = json.load(f)
         self.raw_config = raw
         self.config = raw['objects']
+
+        def _to_bool(val) -> bool:
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, (int, float)):
+                return bool(val)
+            if isinstance(val, str):
+                return val.strip().lower() in {"1", "true", "yes", "on"}
+            return False
+
+        self.bbq_edge = _to_bool(raw.get('bbq_edge', False))
+        self.vl_sat_edge = _to_bool(raw.get('vl_sat_edge', False))
+        self.sv_edge = _to_bool(raw.get('sv_edge', False))
+
+        bbq_center = raw.get('bbq_center_point', [0.0, 0.0, 0.0])
+        if not isinstance(bbq_center, (list, tuple)) or len(bbq_center) != 3:
+            print(f"[WARN] Invalid bbq_center_point={bbq_center}, fallback to [0, 0, 0]")
+            bbq_center = [0.0, 0.0, 0.0]
+        self.bbq_center_point = torch.tensor(bbq_center, device=device, dtype=torch.float32)
+        self.last_bbq_edge_string_relations: Optional[List[List[List[str]]]] = None
+
+        self.vl_sat_predictor = None
+        if self.vl_sat_edge:
+            model_root = '/'.join([os.getcwd(), "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/vl_sat_model"])
+            vl_sat_config_path = raw.get("vl_sat_config_path", os.path.join(model_root, "config/mmgnet.json"))
+            vl_sat_rel_path = raw.get("vl_sat_relationships_path", os.path.join(model_root, "config/relationships.txt"))
+            vl_sat_ckpt_path = raw.get("vl_sat_ckpt_path", "")
+            vl_sat_num_points = int(raw.get("vl_sat_num_points", 512))
+
+            if not vl_sat_ckpt_path:
+                print("[WARN] vl_sat_edge=true but vl_sat_ckpt_path is empty. Falling back to heuristic VL-SAT edges.")
+            else:
+                try:
+                    self.vl_sat_predictor = VLSATEdgePredictorService(
+                        model_root=model_root,
+                        config_path=vl_sat_config_path,
+                        ckpt_path=vl_sat_ckpt_path,
+                        relationships_path=vl_sat_rel_path,
+                        num_points=vl_sat_num_points,
+                    )
+                    print("[INFO] VL-SAT predictor initialized successfully.")
+                except Exception as e:
+                    print(f"[WARN] Failed to initialize VL-SAT predictor ({e}). Falling back to heuristic VL-SAT edges.")
+
+        self.sv_predictor = None
+        if self.sv_edge:
+            try:
+                self.sv_predictor = SceneVerseEdgePredictorService()
+                print("[INFO] SceneVerse edge predictor initialized successfully.")
+            except Exception as e:
+                print(f"[WARN] Failed to initialize SceneVerse edge predictor ({e}). Falling back to simple SV edges.")
+
         self.type_placements_cfg = raw.get('type_placements', {})
-        self.codebook = self._load_codebook("/home/xiso/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/cdecode_dict.json")
+        self.codebook = self._load_codebook('/'.join([os.getcwd(), "source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/cdecode_dict.json"]))
     # в __init__ SceneManager:
         base = {
             'red':[1,0,0],'green':[0,1,0],'blue':[0,0,1],
@@ -386,6 +579,7 @@ class SceneManager:
         self.colors_dict = {k: base[k] for k in ['red','green','blue','yellow','gray','black','brown', 'orange']}  # любое подмножество
         # --- Векторизованная структура данных ---
         self.num_total_objects = sum(obj['count'] for obj in self.config)
+        self.graph_builder = SceneGraphBuilder(device=self.device, num_total_objects=self.num_total_objects)
         self.object_ids = torch.zeros(1, self.num_total_objects, device=self.device)
         self.object_map: Dict[str, Dict] = {}
         self.type_map = defaultdict(list)
@@ -1064,6 +1258,10 @@ class SceneManager:
                                                   use_local_frame=use_local_frame, reference_yaws=reference_yaws)
 
     @torch.no_grad()
+    def get_bbq_edge_string_relations(self, env_ids: Optional[torch.Tensor] = None) -> List[Dict[str, List[str]]]:
+        return self.graph.get_bbq_edge_string_relations(env_ids)
+
+    @torch.no_grad()
     def encode_scene_graph(
         self,
         env_ids: Optional[torch.Tensor] = None,
@@ -1100,18 +1298,21 @@ class SceneManager:
 
         name_b  = name_idx.view(1, M, 1).expand(E, -1, -1)    # [E,M,1]
         color_b = color_idx.view(1, M, 1).expand(E, -1, -1)   # [E,M,1]
-        pad_b   = torch.zeros((E, M, 2), dtype=torch.float32, device=device)  # чтобы было 24
+        pad_b   = torch.zeros((E, M, 2), dtype=torch.float32, device=device)  # padding to reach 30
 
-        per_object_feats = torch.cat([node_feats, edge_feats, name_b, color_b, pad_b], dim=-1)  # [E,M,24]
+        # 2b) Neighbour edge features
+        nbr_edge_feats: torch.Tensor = obs["neighbor_edge_features"]  # [E, M, 6]
 
-        # 3) <<< ВОТ ЭТО НОВОЕ >>> reorder так, чтобы goal был первым
+        per_object_feats = torch.cat([node_feats, edge_feats, nbr_edge_feats, name_b, color_b, pad_b], dim=-1)  # [E,M,30]
+
+        # 3) reorder so that goal is at slot 0
         goal_idxs = self.active_goal_indices[env_ids].long()   # [E]
-        per_object_feats = self.reorder_by_goal(per_object_feats, goal_idxs)     # [E,M,24]
+        per_object_feats = self.reorder_by_goal(per_object_feats, goal_idxs)     # [E,M,30]
 
         if flatten:
-            return per_object_feats.reshape(E, -1)  # [E, M*24]
+            return per_object_feats.reshape(E, -1)  # [E, M*30]
         else:
-            return per_object_feats                 # [E, M, 24]
+            return per_object_feats                 # [E, M, 30]
 
         
     def reorder_by_goal(self, per_object_feats: torch.Tensor, goal_idxs: torch.Tensor) -> torch.Tensor:
@@ -1133,6 +1334,180 @@ class SceneManager:
         )
         
     
+    # ----------- Decode / diagnostic -----------
+    # VL-SAT relation labels (index 0 = none, 1–26 = real relations)
+    _VLSAT_REL_LABELS = [
+        "none", "supported by", "left", "right", "front", "behind",
+        "close by", "inside", "bigger than", "smaller than", "higher than",
+        "lower than", "same symmetry as", "same as", "attached to",
+        "standing on", "lying on", "hanging on", "connected to",
+        "leaning against", "part of", "belonging to", "build in",
+        "standing in", "cover", "lying in", "hanging in",
+    ]
+    # SceneVerse relation labels (index 0 = none, 1–9 = real relations)
+    _SV_REL_LABELS = [
+        "none", "supported_by", "supports", "embedded", "inside",
+        "above", "below", "beside", "near", "far",
+    ]
+
+    def decode_scene_embedding(
+        self,
+        flat_embedding: torch.Tensor,
+        env_idx: int = 0,
+        *,
+        verbose: bool = True,
+    ) -> dict:
+        """Decode the flat scene-graph embedding back into human-readable form.
+
+        Args:
+            flat_embedding: shape ``[E, M*30]`` or ``[M*30]`` — the tensor stored in
+                ``aloha_env.scene_embeddings``.
+            env_idx: which env to decode (when ``flat_embedding`` is batched).
+            verbose: if True, pretty-prints the result.
+
+        Returns:
+            A dict with keys ``"objects"`` (list of per-object dicts) and
+            ``"meta"`` with summary info.
+        """
+        M = self.num_total_objects
+        D = 30
+
+        if flat_embedding.dim() == 1:
+            row = flat_embedding
+        else:
+            row = flat_embedding[env_idx]
+
+        per_obj = row.view(M, D).cpu()  # [M, 30]
+
+        # --- reverse codebook lookups ---
+        name_map_inv = {int(v): k for k, v in self.codebook.get("names", {}).items()}
+        color_map_inv = {int(v): k for k, v in self.codebook.get("colors", {}).items()}
+
+        # Determine which edge type is active for labelling
+        edge_mode = "parent"
+        if self.bbq_edge:
+            edge_mode = "bbq"
+        elif self.vl_sat_edge:
+            edge_mode = "vlsat"
+        elif self.sv_edge:
+            edge_mode = "sv"
+
+        def _decode_edge_channels(ch0, ch1, ch2, ch3, ch4, ch5, mode):
+            """Decode 6 edge channels into a human-readable string."""
+            if ch0 <= 0.5:
+                return ""
+            if mode == "bbq":
+                dirs = []
+                if ch1 < 0: dirs.append("left")
+                elif ch1 > 0: dirs.append("right")
+                if ch2 < 0: dirs.append("front")
+                elif ch2 > 0: dirs.append("back")
+                if ch3 < 0: dirs.append("above")
+                elif ch3 > 0: dirs.append("below")
+                return ", ".join(dirs) if dirs else "same"
+            elif mode == "vlsat":
+                rid = int(round(ch1))
+                label = self._VLSAT_REL_LABELS[rid] if 0 <= rid < len(self._VLSAT_REL_LABELS) else f"?{rid}"
+                return f"rel={rid} ({label})"
+            elif mode == "sv":
+                rid = int(round(ch1))
+                label = self._SV_REL_LABELS[rid] if 0 <= rid < len(self._SV_REL_LABELS) else f"?{rid}"
+                return f"rel={rid} ({label})"
+            else:  # parent
+                return f"z_diff={ch1:.2f}, lvl_diff={ch2:.0f}, dist={ch3:.2f}"
+
+        objects_info = []
+        for j in range(M):
+            f = per_obj[j]
+            # Node features (ch 0–13)
+            pos     = f[0:3].tolist()
+            size    = f[3:6].tolist()
+            radius  = f[6].item()
+            rgb     = f[7:10].tolist()
+            obj_id  = f[10].item()
+            active  = f[11].item()
+            parent  = f[12].item()
+            level   = f[13].item()
+
+            # Goal edge features (ch 14–19)
+            ge = [f[14+k].item() for k in range(6)]
+
+            # Neighbour edge features (ch 20–25)
+            ne = [f[20+k].item() for k in range(6)]
+
+            # Codebook (ch 26–27)
+            name_code  = int(f[26].item())
+            color_code = int(f[27].item())
+            # ch 28–29 = padding (zeros)
+
+            decoded_name  = name_map_inv.get(name_code, f"?{name_code}")
+            decoded_color = color_map_inv.get(color_code, f"?{color_code}")
+
+            goal_edge_str = _decode_edge_channels(*ge, edge_mode)
+            nbr_edge_str  = _decode_edge_channels(*ne, edge_mode)
+
+            info = {
+                "slot": j,
+                "name": decoded_name,
+                "color": decoded_color,
+                "obj_id": obj_id,
+                "active": active,
+                "pos": pos,
+                "size": size,
+                "radius": radius,
+                "rgb": rgb,
+                "parent": parent,
+                "level": level,
+                "goal_edge_exists": ge[0] > 0.5,
+                "goal_edge_dist": ge[4],
+                "goal_edge_id_diff": ge[5],
+                "goal_edge_relation": goal_edge_str,
+                "goal_edge_raw": ge,
+                "nbr_edge_exists": ne[0] > 0.5,
+                "nbr_edge_dist": ne[4],
+                "nbr_edge_id_diff": ne[5],
+                "nbr_edge_relation": nbr_edge_str,
+                "nbr_edge_raw": ne,
+            }
+            objects_info.append(info)
+
+        meta = {
+            "edge_mode": edge_mode,
+            "M": M,
+            "D": D,
+            "goal_slot": 0,
+            "num_goal_edges": sum(1 for o in objects_info if o["goal_edge_exists"]),
+            "num_nbr_edges": sum(1 for o in objects_info if o["nbr_edge_exists"]),
+            "num_active_objects": sum(1 for o in objects_info if o["active"] > 0.5),
+        }
+
+        if verbose:
+            print(f"\n{'='*120}")
+            print(f"  SCENE GRAPH EMBEDDING — env {env_idx}  (edge_mode={edge_mode}, D={D})")
+            print(f"  goal at slot 0, {meta['num_active_objects']} active objects, "
+                  f"{meta['num_goal_edges']} goal edges, {meta['num_nbr_edges']} nbr edges")
+            print(f"{'='*120}")
+            hdr = (f"{'Slot':>4}  {'Name':<12} {'Color':<8} {'ID':>4} {'Act':>3} "
+                   f"{'Pos (x,y,z)':<22} {'GDist':>6} {'Goal edge':<26} "
+                   f"{'NDist':>6} {'Nbr edge':<26}")
+            print(hdr)
+            print("-" * 120)
+            for o in objects_info:
+                act_s = "Yes" if o["active"] > 0.5 else " - "
+                pos_s = f"({o['pos'][0]:+.2f},{o['pos'][1]:+.2f},{o['pos'][2]:+.2f})"
+                gdist_s = f"{o['goal_edge_dist']:.2f}" if o["goal_edge_exists"] else "  -  "
+                grel_s = o["goal_edge_relation"] if o["goal_edge_exists"] else ""
+                ndist_s = f"{o['nbr_edge_dist']:.2f}" if o["nbr_edge_exists"] else "  -  "
+                nrel_s = o["nbr_edge_relation"] if o["nbr_edge_exists"] else ""
+                goal_marker = " <<GOAL" if o["slot"] == 0 else ""
+                print(f"{o['slot']:>4}  {o['name']:<12} {o['color']:<8} "
+                      f"{o['obj_id']:>4.0f} {act_s:>3} "
+                      f"{pos_s:<22} {gdist_s:>6} {grel_s:<26} "
+                      f"{ndist_s:>6} {nrel_s:<26}{goal_marker}")
+            print(f"{'='*120}\n")
+
+        return {"objects": objects_info, "meta": meta}
+
     def _load_codebook(self, codebook_path: str):
         """
         Загружает JSON с маппингом:

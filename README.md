@@ -10,34 +10,17 @@ The installation process fully complies with the official Isaac Lab documentatio
 
 The launch is carried out in accordance with the official documentation. The name of the environment - Isaac-Aloha-Direct-v0
 The SAC algorithm of the skrl library is used here.
-Install requirements:
+## Installation 
+1. Execute all steps from official [installation instruction](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/binaries_installation.html), up until:
 ```
-pip install -r requirements.txt
+./isaaclab.sh --install
 ```
-or
-```
-conda env create -f environment.yml
-```
-
-link for all data and assets:
+2. Download all necessary data and assets:
 ```
 https://drive.google.com/drive/folders/1sdWFHsREqW_2fmu2E2mjV8LxF6KUYaSe?usp=sharing
 ```
-Train navigation:
-```
-./isaaclab.sh -p scripts/algos/run_sac.py
-```
+3. Put aloha_assets.zip and unzip it to IsaacLab/source/isaaclab_assets/data/
 
-Imitation learning:
-For IL firsly you should get paths:
-```
-./isaaclab.sh -p path_generator.py
-```
-To generate paths via dijkstra algo (Check, that there no all_paths.json in data):
-```
-./isaaclab.sh -p source/isaaclab_tasks/isaaclab_tasks/direct/aloha/path_generator.py 
-```
-1. Put aloha_assets.zip and unzip it to IsaacLab/source/isaaclab_assets/data/
 Asset directories should look like this by the path IsaacLab/source/isaaclab_assets/data/:
 ```
 └── aloha_assets
@@ -52,6 +35,34 @@ Asset directories should look like this by the path IsaacLab/source/isaaclab_ass
             ├── kitchen_new_simple.usd
             └── table
 ```
-2. Put "all_paths.json" to "IsaacLab/data/"
-3. Put "text_embeddings.pt" to "IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/"
-4. Replace the "skrl" folder on the "miniconda3/envs/env_isaaclab/lib/python3.10/site-packages/skrl" path with a folder from IsaacLab
+4. Put "all_paths.json" to "IsaacLab/data/"
+5. Put "text_embeddings.pt" to "IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/"
+6. Replace the "skrl" folder on the "miniconda3/envs/env_isaaclab/lib/python3.10/site-packages/skrl" path with a folder from IsaacLab
+After that, installation is successful.
+7. If you want additionally to build a docker image, run:
+```
+docker build -f /full/path/to/target/Dockerfile -t semanticnav /full/path/to/folder/which/contains/Semanticnav_and_isaacsim
+```
+
+8. Later, it can be run with:
+```
+docker run --name isaac-sim --entrypoint bash -it --runtime=nvidia --gpus all -e "ACCEPT_EULA=Y" --rm --network=host semanticnav
+```
+If run is not successfull, try following full guide from:
+https://docs.isaacsim.omniverse.nvidia.com/4.5.0/installation/install_container.html
+(Instead of pulling image, build image from scratch using Dockerfile)
+## Usage examples
+Train navigation:
+```
+./isaaclab.sh -p scripts/algos/run_sac.py
+```
+
+Imitation learning:
+For IL firsly you should get paths:
+```
+./isaaclab.sh -p path_generator.py
+```
+To generate paths via dijkstra algo (Check, that there no all_paths.json in data):
+```
+./isaaclab.sh -p source/isaaclab_tasks/isaaclab_tasks/direct/aloha/path_generator.py 
+```
