@@ -157,12 +157,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.random_actions = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
-        self.CL_ON = cfg.curriculum
+        self.CL_ON = False
         self.stage = 0
         self.use_staff = True
         self.use_obstacles = True
-        self.use_controller = cfg.controller
-        self.imitation = cfg.imitation
+        self.use_controller = True
+        self.imitation = False
         
         self.turn_on_obstacles = False
         self.turn_on_obstacles_always = False
@@ -360,9 +360,6 @@ class WheeledRobotEnv(DirectRLEnv):
         if self.CAMERA:
             camera_data = self._tiled_camera.data.output["rgb"].clone()  # (num_envs, 224, 224, 3)
 
-            # берем только первую среду
-            first_img = camera_data[0]  # (224, 224, 3)
-
             # Переводим в float и нормализуем для CLIP
             imgs = camera_data.to(device=self.device, dtype=torch.float32, non_blocking=True) / 255.0
             imgs = imgs.permute(0, 3, 1, 2)  # (N, 3, H, W)
@@ -373,20 +370,6 @@ class WheeledRobotEnv(DirectRLEnv):
                 image_embeddings = self.clip_model.get_image_features(**inputs)
                 image_embeddings = image_embeddings / (image_embeddings.norm(dim=1, keepdim=True) + 1e-9)
 
-            # --- Сохраняем первую среду ---
-            import cv2
-            import numpy as np
-            save_path = os.path.join("/home/xiso/Downloads/delete", f"processed_rgb_{0}.png")
-            
-            # Преобразуем в формат OpenCV (HWC, uint8)
-            first_img_cv = (first_img.cpu().numpy()).astype(np.uint8)  # если нужно нормализовать обратно
-            cv2.imwrite(save_path, cv2.cvtColor(first_img_cv, cv2.COLOR_RGB2BGR))  # OpenCV использует BGR
-            print(f"Saved processed RGB image to {save_path}")
-            # Преобразуем в формат OpenCV (HWC, uint8)
-            save_path = os.path.join("/home/xiso/Downloads/delete", f"processed_rgb_{1}.png")
-            first_img_cv = (first_img_2.cpu().numpy() * 255).astype(np.uint8)  # если нужно нормализовать обратно
-            cv2.imwrite(save_path, cv2.cvtColor(first_img_cv, cv2.COLOR_RGB2BGR))  # OpenCV использует BGR
-            print(f"Saved processed RGB 2 image to {save_path}")
         # Получение скоростей робота
         root_lin_vel_w = torch.norm(self._robot.data.root_lin_vel_w[:, :2], dim=1).unsqueeze(-1)
         root_ang_vel_w = self._robot.data.root_ang_vel_w[:, 2].unsqueeze(-1)
@@ -548,8 +531,9 @@ class WheeledRobotEnv(DirectRLEnv):
             self.turn_off_controller_step += 1
             linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
-        # linear_speed = torch.zeros_like(linear_speed)
-        # angular_speed = torch.ones_like(angular_speed)
+
+        linear_speed = torch.zeros_like(linear_speed)
+        angular_speed = torch.ones_like(angular_speed)
         self.angular_speed = angular_speed
         self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
         self._left_wheel_vel = (linear_speed - (angular_speed * L / 2)) / r

@@ -12,7 +12,7 @@ from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 from ppo.helper import RolloutVideoWrapper
 
-from networks.networks_orm_memory import *
+from networks.networks_orm import *
 set_seed(42)
 
 
@@ -43,8 +43,8 @@ VIDEO = False
 LIVESTREAM = False
 USE_PRETRAINED = False
 
-num_envs = 4
-timestepslen = 10000000
+num_envs = 128
+timestepslen = 100000
 headless = True
 
 if EVAL or VIDEO:
@@ -96,7 +96,7 @@ graph_encoder = GraphEncoder(
 ).to(device)
 
 orient_module = OrientationModule(
-    img_dim=env.observation_space["memory"].shape[0],
+    img_dim=env.observation_space["img"].shape[0],
 ).to(device)
 
 graph_encoder.eval()
@@ -104,7 +104,7 @@ orient_module.eval() # custom trainer turn it to train in train steps
 
 memory_size = 1500
 if num_envs == 128:
-    memory_size = 1500
+    memory_size = 1400
 elif num_envs == 64:
     memory_size = 2000
 elif num_envs == 32:
