@@ -1120,10 +1120,10 @@ class WheeledRobotEnv(DirectRLEnv):
         omni_logger.addHandler(handler)
         omni_logger.setLevel(logging.WARNING)
 
-    def render(self):
+    def render_fpv(self):
         assert self.CAMERA, "Render is only available when CAMERA mode is enabled."
-        camera_data = self._tiled_camera.data.output["rgb"].clone()  # Shape: (num_envs, 224, 224, 3)
-        return camera_data.permute(0, 3, 1, 2)
+        camera_data = self._tiled_camera.data.output["rgb"].clone().cpu().numpy()  # Shape: (num_envs, 224, 224, 3)
+        return camera_data
 
 
 # ============================================================================

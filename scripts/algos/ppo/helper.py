@@ -11,21 +11,21 @@ class RolloutVideoWrapper(gymnasium.Wrapper):
         self.logger = logger
         self.video_folder = video_folder
         self.episode_frequency = episode_frequency
-        self.current_episode = -1
-        self.video_buffer = []
+        self.current_episode = 0
+        self.video_buffer = {'third': [], 'first': []}
         self.recorded_env = recorded_env
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
+        if self.current_episode % self.episode_frequency == 0:
+            self.video_buffer['first'].append(self.env.unwrapped.render_fpv()[0])
+            self.video_buffer['third'].append(self.env.render())
+
         if terminated[self.recorded_env] or truncated[self.recorded_env]:
-            if len(self.video_buffer) > 0:
-                video_path = f"{self.video_folder}/episode_{self.current_episode}.mp4"
+            if len(self.video_buffer['third']) > 0:
                 self.log_video()
-                self.video_buffer = []
             self.current_episode += 1
 
-        if self.current_episode % self.episode_frequency == 0:
-            self.video_buffer.append(self.env.render()[0])
 
         return obs, reward, terminated, truncated, info
     
@@ -33,24 +33,25 @@ class RolloutVideoWrapper(gymnasium.Wrapper):
         return self.env.reset()
     
     def log_video(self):
-        video_path = f"{self.video_folder}/episode_{self.current_episode}.mp4"
-        video = cv2.VideoWriter(
-            video_path,
-            cv2.VideoWriter_fourcc(*"mp4v"),
-            10,
-            (self.video_buffer[0].shape[2], self.video_buffer[0].shape[1])
-        )
-        for frame in self.video_buffer:
-            video.write(frame.permute(1, 2, 0).cpu().numpy())
-        video.release()
-
-        if isinstance(self.logger, Experiment):
-            video_path = f"{os.getcwd()}/{self.video_folder}/episode_{self.current_episode}.mp4"
-            self.logger.log_video(
-                file = video_path,
-                name=f"episode_examples",
-                step=self.current_episode,
-                format="mp4"
+        for key in self.video_buffer.keys():
+            video_path = f"{self.video_folder}/episode_{self.current_episode}_{key}.mp4"
+            video = cv2.VideoWriter(
+                video_path,
+                cv2.VideoWriter_fourcc(*"mp4v"),
+                10,
+                (self.video_buffer[key][0].shape[1], self.video_buffer[key][0].shape[0])
             )
-            self.video_buffer = []
-            os.remove(video_path)
+            for frame in self.video_buffer[key]:
+                video.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            video.release()
+
+            if isinstance(self.logger, Experiment):
+                video_path = f"{os.getcwd()}/{self.video_folder}/episode_{self.current_episode}_{key}.mp4"
+                self.logger.log_video(
+                    file = video_path,
+                    name=f"episode_examples_{key}",
+                    step=self.current_episode,
+                    format="mp4"
+                )
+                self.video_buffer[key] = []
+                os.remove(video_path)

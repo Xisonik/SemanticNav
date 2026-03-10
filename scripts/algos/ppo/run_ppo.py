@@ -36,7 +36,7 @@ headless = True
 if EVAL:
     timestepslen = 800
 
-cli_args = ["--enable_cameras"]
+cli_args = ["--enable_cameras", "--video"]
 
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
@@ -61,7 +61,7 @@ else:
         headless=headless, 
         cli_args=cli_args
     )
-    env = RolloutVideoWrapper(env, experiment, episode_frequency=10)
+    env = RolloutVideoWrapper(env, experiment, episode_frequency=1)
 
 env = wrap_env(env)
 device = env.device

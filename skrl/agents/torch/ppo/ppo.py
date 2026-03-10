@@ -481,7 +481,6 @@ class PPO(Agent):
         if self._entropy_loss_scale:
             self.track_data("Loss / Entropy loss", cumulative_entropy_loss / total_updates)
         
-
         self.track_data("Policy / Standard deviation", self.policy.distribution(role="policy").stddev.mean().item())
 
         if self._learning_rate_scheduler:

@@ -10,11 +10,18 @@ from skrl.memories.torch import RandomMemory
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
+from ppo.helper import RolloutVideoWrapper
 
 from networks.networks_orm_memory import *
 set_seed(42)
 
-
+from comet_ml import start
+from comet_ml.integration.pytorch import log_model
+experiment = start(
+    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
+    project_name="robo",
+    workspace="denmanorwat"
+)
 
 """
 - Пайплайны:
@@ -32,7 +39,7 @@ VIDEO = False
 LIVESTREAM = False
 USE_PRETRAINED = False
 
-num_envs = 128
+num_envs = 4
 timestepslen = 10000000
 headless = True
 
@@ -68,6 +75,8 @@ else:
         cli_args=cli_args
     )
 
+
+env = RolloutVideoWrapper(env, experiment, episode_frequency=1)
 if VIDEO:
     env = RecordVideo(
         env,
@@ -174,13 +183,6 @@ aux_trainer = AuxModuleTrainer(
     log_interval=1000,
 )
 
-from comet_ml import start
-from comet_ml.integration.pytorch import log_model
-experiment = start(
-    api_key="DRYfW6B6VtUQr9llvf3jup57R",
-    project_name="general",
-    workspace="xisonik"
-)
 _original_post = agent.post_interaction
 mode_1 = False
 def _post_with_aux(timestep, timesteps):
@@ -191,8 +193,8 @@ def _post_with_aux(timestep, timesteps):
 
     if timestep % 2000 == 0:
         save_dir = cfg["experiment"]["directory"]
-        torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
-        torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
+        #torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
+        #torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
     # if timestep % 2000 == 0:
     #     memory.save(directory="logs/skrl/memory")
     if timestep % 50 == 0:
