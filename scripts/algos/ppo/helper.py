@@ -17,12 +17,14 @@ class RolloutVideoWrapper(gymnasium.Wrapper):
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
-        if self.current_episode % self.episode_frequency == 0:
+        if (self.current_episode % self.episode_frequency == 0) or\
+                (self.current_episode % self.episode_frequency == (self.episode_frequency - 1) and\
+                (terminated[self.recorded_env] or truncated[self.recorded_env])):
             self.video_buffer['first'].append(self.env.unwrapped.render_fpv()[self.recorded_env])
             self.video_buffer['third'].append(self.env.render())
 
         if terminated[self.recorded_env] or truncated[self.recorded_env]:
-            if len(self.video_buffer['third']) > 0:
+            if len(self.video_buffer['third']) > 1:
                 self.log_video()
             self.current_episode += 1
 
@@ -50,8 +52,7 @@ class RolloutVideoWrapper(gymnasium.Wrapper):
                 self.logger.log_video(
                     file = video_path,
                     name=f"episode_examples_{key}",
-                    step=self.current_episode,
-                    format="mp4"
+                    step=self.current_episode
                 )
                 self.video_buffer[key] = []
                 os.remove(video_path)

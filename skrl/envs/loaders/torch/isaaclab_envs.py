@@ -168,8 +168,8 @@ def load_isaaclab_env(
         import isaaclab_tasks  # type: ignore
         from isaaclab_tasks.utils import parse_env_cfg  # type: ignore
 
-    cfg = parse_env_cfg(args.task, controller = args.controller, imitation = args.imitation, curriculum = args.curriculum,
-                        device = args.device, num_envs = args.num_envs, use_fabric = not args.disable_fabric)
+    cfg = parse_env_cfg(args.task, controller=args.controller, imitation=args.imitation, curriculum=args.curriculum, 
+                        device=args.device, num_envs=args.num_envs, use_fabric=not args.disable_fabric)
 
     # print config
     if show_cfg:

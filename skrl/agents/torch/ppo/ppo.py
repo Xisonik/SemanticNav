@@ -481,6 +481,12 @@ class PPO(Agent):
         if self._entropy_loss_scale:
             self.track_data("Loss / Entropy loss", cumulative_entropy_loss / total_updates)
         
+        # НОВОЕ: Track orientation metrics
+        if cumulative_orientation_loss > 0:
+            self.track_data("Localization / Orientation Loss", cumulative_orientation_loss / total_updates)
+        if cumulative_orientation_accuracy > 0:
+            self.track_data("Localization / Orientation Accuracy", cumulative_orientation_accuracy / total_updates)
+
         self.track_data("Policy / Standard deviation", self.policy.distribution(role="policy").stddev.mean().item())
 
         if self._learning_rate_scheduler:

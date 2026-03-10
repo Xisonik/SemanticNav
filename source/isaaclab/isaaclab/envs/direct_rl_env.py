@@ -365,7 +365,15 @@ class DirectRLEnv(gym.Env):
 
         # -- reset envs that terminated/timed-out and log the episode information
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
+        self.extras['true_next_obs'] = None
         if len(reset_env_ids) > 0:
+            self.extras['true_next_obs'] = self._get_observations()
+            # add observation noise
+            # note: we apply no noise to the state space (since it is used for critic networks)
+            if self.cfg.observation_noise_model:
+                self.extras['true_next_obs']['policy'] =\
+                    self._observation_noise_model(self.extras['true_next_obs']['policy'])
+            
             self._reset_idx(reset_env_ids)
             # update articulation kinematics
             self.scene.write_data_to_sim()

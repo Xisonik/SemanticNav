@@ -61,7 +61,7 @@ else:
         headless=headless, 
         cli_args=cli_args
     )
-    env = RolloutVideoWrapper(env, experiment, episode_frequency=1)
+    env = RolloutVideoWrapper(env, experiment, episode_frequency=100)
 
 env = wrap_env(env)
 device = env.device

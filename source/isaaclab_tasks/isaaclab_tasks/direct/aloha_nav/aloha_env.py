@@ -553,7 +553,7 @@ class WheeledRobotEnv(DirectRLEnv):
         
         self.previous_angle_error = a_error
 
-        has_contact = self.get_contact()
+        has_contact = torch.logical_or(self.get_contact(), self.out_of_bounds())
 
         progress = self.previous_distance_error - r_error  # >0 если ближе к цели
         turnes = gamma * progress
