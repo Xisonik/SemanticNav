@@ -1120,8 +1120,21 @@ class WheeledRobotEnv(DirectRLEnv):
         omni_logger.addHandler(handler)
         omni_logger.setLevel(logging.WARNING)
 
+    def get_environment_which_is_closest_to_camera_lookat(self):
+        env_positions = self._terrain.env_origins
+        camera_lookat = torch.tensor(self.cfg.viewer.lookat).to(env_positions.device)
+
+        # Small substraction to prefer environments which are closer from
+        # positive side
+        distances = torch.linalg.norm(env_positions - camera_lookat - 0.001, dim=-1)
+
+        closest_env_idx = distances.argmin().item()
+        return closest_env_idx
+
     def render_fpv(self):
         assert self.CAMERA, "Render is only available when CAMERA mode is enabled."
+        # Choose an environment which is closest to the origin. A small number (0.001)
+        # is substracted to prefer environments with origins
         camera_data = self._tiled_camera.data.output["rgb"].clone().cpu().numpy()  # Shape: (num_envs, 224, 224, 3)
         return camera_data
 

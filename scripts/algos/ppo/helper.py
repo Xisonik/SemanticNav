@@ -5,7 +5,7 @@ import os
 
 class RolloutVideoWrapper(gymnasium.Wrapper):
     def __init__(self, env, logger, video_folder = "logs/skrl/videos",
-                 episode_frequency = 100, recorded_env = 0):
+                 episode_frequency = 100):
         super().__init__(env)
         os.makedirs(f'{os.getcwd()}/{video_folder}', exist_ok=True)
         self.logger = logger
@@ -13,12 +13,12 @@ class RolloutVideoWrapper(gymnasium.Wrapper):
         self.episode_frequency = episode_frequency
         self.current_episode = 0
         self.video_buffer = {'third': [], 'first': []}
-        self.recorded_env = recorded_env
+        self.recorded_env = env.unwrapped.get_environment_which_is_closest_to_camera_lookat()
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
         if self.current_episode % self.episode_frequency == 0:
-            self.video_buffer['first'].append(self.env.unwrapped.render_fpv()[0])
+            self.video_buffer['first'].append(self.env.unwrapped.render_fpv()[self.recorded_env])
             self.video_buffer['third'].append(self.env.render())
 
         if terminated[self.recorded_env] or truncated[self.recorded_env]:
