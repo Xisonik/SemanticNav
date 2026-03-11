@@ -159,7 +159,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
         self.CL_ON = False
-        self.stage = 0
+        self.stage = 2
         self.use_staff = True
         self.use_obstacles = True
         self.use_controller = True
@@ -781,16 +781,51 @@ class WheeledRobotEnv(DirectRLEnv):
         return self.success_rate
     
     def out_of_bounds(self):
-        poses = self.to_local(self._robot.data.root_pos_w)
-        x, y = poses[..., 0], poses[..., 1]
+        if not self.TURN_TASK:
+            poses = self.to_local(self._robot.data.root_pos_w)
+            x, y = poses[..., 0], poses[..., 1]
 
-        xmin = self.scene_manager.room_bounds['x_min'] + 1.5
-        xmax = self.scene_manager.room_bounds['x_max'] - 1.5
-        ymin = self.scene_manager.room_bounds['y_min'] + 1.5
-        ymax = self.scene_manager.room_bounds['y_max'] - 1.5
+            xmin = self.scene_manager.room_bounds['x_min'] + 1.5
+            xmax = self.scene_manager.room_bounds['x_max'] - 1.5
+            ymin = self.scene_manager.room_bounds['y_min'] + 1.5
+            ymax = self.scene_manager.room_bounds['y_max'] - 1.5
 
-        in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
-        return ~in_bounds
+            in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+            return ~in_bounds
+        else:
+            root_pos_w = self._robot.data.root_pos_w[:, :2]
+            root_quat_w = self._robot.data.root_quat_w  # shape [N, 4]
+
+            # Локальный вектор взгляда робота (вперёд по оси X)
+            local_forward = torch.tensor([1.0, 0.0, 0.0], device=root_quat_w.device, dtype=root_quat_w.dtype)
+            local_forward = local_forward.unsqueeze(0).repeat(root_quat_w.shape[0], 1)  # [N, 3]
+
+            # Вектор взгляда в мировых координатах
+            forward_w = self.quat_rotate(root_quat_w, local_forward)  # [N, 3]
+
+            # Вектор от робота к цели
+            root_pos_w = self._robot.data.root_pos_w  # [N, 3]
+            to_goal = self._desired_pos_w - root_pos_w  # [N, 3]
+
+            # Нормализуем векторы
+            forward_w_norm = torch.nn.functional.normalize(forward_w[:, :2] , dim=1)
+            to_goal_norm = torch.nn.functional.normalize(to_goal[:, :2] , dim=1)
+
+            # Косинус угла между векторами взгляда и направления на цель
+            cos_angle = torch.sum(forward_w_norm * to_goal_norm, dim=1)
+            cos_angle = torch.clamp(cos_angle, -1.0, 1.0)  # для безопасности
+            # direction_to_goal = to_goal
+            # yaw_g = torch.atan2(direction_to_goal[:, 1], direction_to_goal[:, 0])
+
+            # Вычисляем угол между векторами
+            angle = torch.acos(cos_angle)
+            angle_degrees = torch.abs(angle) * 180.0 / 3.141592653589793
+            # Проверяем, что угол меньше порога
+            out = angle_degrees > 170
+            # if torch.any(out):
+            #     print("out: ", out)
+
+            return out
     
     def update_sr_stack(self):
         self.success_stacks = [[] for _ in range(self.num_envs)]  # Список списков для каждой среды

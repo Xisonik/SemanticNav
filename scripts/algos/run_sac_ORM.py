@@ -43,7 +43,7 @@ VIDEO = False
 LIVESTREAM = False
 USE_PRETRAINED = False
 
-num_envs = 128
+num_envs = 64
 timestepslen = 100000
 headless = True
 
@@ -138,7 +138,7 @@ models = {
 
 cfg = SAC_DEFAULT_CONFIG.copy()
 cfg["gradient_steps"] = 1
-cfg["batch_size"] = 1024
+cfg["batch_size"] = 512
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
 cfg["actor_learning_rate"] = 3e-4 # 3e-4
