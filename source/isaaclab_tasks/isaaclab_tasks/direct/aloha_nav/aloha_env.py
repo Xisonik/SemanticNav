@@ -527,8 +527,6 @@ class WheeledRobotEnv(DirectRLEnv):
             self.turn_off_controller_step += 1
             linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
-        # linear_speed = torch.zeros_like(linear_speed)
-        # angular_speed = torch.ones_like(angular_speed)
         self.angular_speed = angular_speed
         self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
         self._left_wheel_vel = (linear_speed - (angular_speed * L / 2)) / r
