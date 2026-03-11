@@ -1,12 +1,12 @@
 """
-SAC + отдельно обучаемые GraphEncoder и OrientationModule
+PPO + обучаемые GraphEncoder и OrientationModule
 ---------------------------------------------------------
 Архитектура:
   - GraphEncoder: CLIP text lookup + GATv2 → graph_emb (128)
   - OrientationModule: img + graph_emb → orientation angle
-  - Actor/Critic: используют graph_emb и orientation через no_grad
-  - GraphEncoder и OrientationModule имеют СВОИ оптимизаторы,
-    обучаются из replay buffer по orientation loss
+  - Policy (Actor): обучает GraphEncoder через градиенты
+  - Value: использует GraphEncoder через no_grad
+  - На вход сетям: img + gt_orientation
 """
 import torch
 import torch.nn as nn
@@ -27,7 +27,6 @@ NUM_ORIENT_BINS = 36
 GOAL_NODE_INDEX = 0
 
 # for accuracy
-# Внешние массивы для сбора данных при EVAL
 eval_gt_angles = []
 eval_pred_angles = []
 eval_step_counter = 0
@@ -50,7 +49,7 @@ def print_orientation_accuracy(peep=False):
             step = 0
         if len(eval_gt_angles) == 0:
             print("No orientation data collected")
-            return
+            return 0, 0, 0
         
         gt = torch.cat(eval_gt_angles, dim=0)
         pred = torch.cat(eval_pred_angles, dim=0)
@@ -59,7 +58,7 @@ def print_orientation_accuracy(peep=False):
         error = torch.abs(gt - pred)
         error = torch.minimum(error, 2*torch.pi - error)
         
-        # Accuracy при допустимой ошибке < 5 градусов (0.087 rad)
+        # Accuracy при допустимой ошибке
         if peep:
             print(f"\n{'='*50}")
             print(f"EVAL COMPLETED")
@@ -68,14 +67,17 @@ def print_orientation_accuracy(peep=False):
             print(f"Std error: {error.std().item()*180/torch.pi:.2f} degrees")
             print(f"Min error: {error.min().item()*180/torch.pi:.2f} degrees")
             print(f"Max error: {error.max().item()*180/torch.pi:.2f} degrees")
+        
         threshold = 10.0 * torch.pi / 180.0
         accuracy_10 = (error < threshold).float().mean().item()
         if peep:
             print(f"Orientation accuracy (<10°): {accuracy_10*100:.2f}%")
+        
         threshold = 20.0 * torch.pi / 180.0
         accuracy_20 = (error < threshold).float().mean().item()
         if peep:
             print(f"Orientation accuracy (<20°): {accuracy_20*100:.2f}%")
+        
         threshold = 30.0 * torch.pi / 180.0
         accuracy_30 = (error < threshold).float().mean().item()
         if peep:
@@ -88,6 +90,7 @@ def print_orientation_accuracy(peep=False):
             eval_pred_angles.clear()
             eval_step_counter = 0
         return accuracy_10, accuracy_20, accuracy_30
+    return 0, 0, 0
 
 # =====================================================================
 # Edge builder
@@ -107,17 +110,11 @@ def build_star_chain_edge_index(num_nodes, batch_size, device, add_self_loops=Tr
 
 
 # =====================================================================
-# GraphEncoder (объединяет SharedGraphModule + SceneGraphGATEncoder)
+# GraphEncoder
 # =====================================================================
 class GraphEncoder(nn.Module):
     """
     graph_flat [B, N*24] → graph_emb [B, 128]
-
-    Внутри:
-      1. CLIP text lookup (frozen embeddings) → text_emb per node
-      2. Node MLP: (24 + text_dim) → hidden
-      3. GATv2 × num_layers
-      4. Global mean pool → head → graph_emb
     """
     def __init__(
         self,
@@ -175,7 +172,6 @@ class GraphEncoder(nn.Module):
 
         self._edge_cache = {}
 
-    # --- text encoding helpers ---
     def _encode_text(self, name_idx, color_bits_or_idx):
         """name_idx: [B,N], color_bits_or_idx: [B,N] or [B,N,3] → [B,N,text_dim]"""
         if name_idx.dim() == 3:
@@ -192,7 +188,6 @@ class GraphEncoder(nn.Module):
         emb = 0.5 * (self.name_embs[name_idx] + self.color_embs[color_idx])
         return self.text_proj(emb)
 
-    # --- edge index with cache ---
     def _get_edge_index(self, B, device):
         key = (B, device.index if device.type == "cuda" else -1)
         ei = self._edge_cache.get(key)
@@ -241,13 +236,13 @@ class OrientationModule(nn.Module):
             nn.Linear(128, num_bins),
         )
 
-        # Предвычисленные bin centers (регистрируем как buffer)
+        # Предвычисленные bin centers
         bin_size = 2 * torch.pi / num_bins
         centers = torch.linspace(-torch.pi, torch.pi, num_bins + 1)[:-1] + bin_size / 2
         self.register_buffer("bin_centers", centers)
 
     def forward(self, img, graph_emb):
-        """Только forward без loss. Возвращает (pred_angle [B,1], probs [B,36])."""
+        """Возвращает (pred_angle [B,1], probs [B,36], logits [B,36])."""
         logits = self.net(torch.cat([img, graph_emb], dim=-1))
         probs = F.softmax(logits, dim=-1)
         pred_angle = self.bin_centers[probs.argmax(-1)].unsqueeze(-1)
@@ -258,30 +253,13 @@ class OrientationModule(nn.Module):
         if gt_yaw.dim() == 2:
             gt_yaw = gt_yaw.squeeze(-1)
 
-        global step
-        if step > 2999:    
-            with torch.no_grad():
-                pred_bins = probs.argmax(-1)
-                print(f"\n=== OrientationModule Debug ===")
-                print(f"logits shape: {logits.shape}")
-                print(f"logits mean: {logits.mean().item():.4f}, std: {logits.std().item():.4f}")
-                print(f"probs max: {probs.max().item():.4f}, min: {probs.min().item():.4f}")
-                print(f"predicted bins unique: {torch.unique(pred_bins)}")
-                pred_angle = self.bin_centers[probs.argmax(-1)].unsqueeze(-1)
-                print(f"pred_angle sample: {pred_angle[:5].flatten()}")
-                print(f"bin_centers[:5]: {self.bin_centers[:5]}")
-                print(f"===============================\n")
-
         gt_norm = torch.atan2(torch.sin(gt_yaw), torch.cos(gt_yaw))
         bin_size = 2 * torch.pi / self.num_bins
         labels = ((gt_norm + torch.pi) / bin_size).long().clamp(0, self.num_bins - 1)
 
-        # Cross-entropy (стабильнее Von Mises KL)
+        # Cross-entropy с label smoothing
         loss = F.cross_entropy(logits, labels, label_smoothing=0.05)
         
-        if step > 2999:
-            unique_labels, counts = torch.unique(labels, return_counts=True)
-            print(f"Label distribution: {dict(zip(unique_labels.cpu().numpy(), counts.cpu().numpy()))}")
         # Метрики
         with torch.no_grad():
             pred_bins = logits.argmax(-1)
@@ -336,100 +314,103 @@ class DictRunningStandardScaler(nn.Module):
 
 
 # =====================================================================
-# Actor & Critic
+# PPO Policy (Actor)
 # =====================================================================
-class StochasticActor(GaussianMixin, Model):
+class Policy(GaussianMixin, Model):
+    """Policy для PPO: обучает GraphEncoder через градиенты
+    
+    На вход: img + gt_orientation
+    На выход: среднее и std для гауссова распределения действий
+    """
     def __init__(self, observation_space, action_space, device,
                  graph_encoder, orient_module,
                  clip_actions=False, clip_log_std=True, min_log_std=-5, max_log_std=2):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std, min_log_std, max_log_std)
 
-        # Не регистрируем — SAC optimizer их не увидит
-        self.__dict__["graph_encoder"] = graph_encoder
-        self.__dict__["orient_module"] = orient_module
+        # В PPO регистрируем как submodules - они будут обучаться!
+        self.graph_encoder = graph_encoder
+        self.orient_module = orient_module
 
         img_dim = int(observation_space["img"].shape[0])
-        goal_dim = int(observation_space["goal"].shape[0])
-        memory_dim = int(observation_space["memory"].shape[0])
-        mlp_in = img_dim + 1# img + graph_emb + pred_angle
+        mlp_in = img_dim + 1  # img + gt_orientation
 
         self.net = nn.Sequential(
-            nn.Linear(mlp_in, 512), nn.ReLU(),
-            nn.Linear(512, 256), nn.ReLU(),
-            nn.Linear(256, self.num_actions), nn.Tanh(),
+            nn.Linear(mlp_in, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, self.num_actions),
+            nn.Tanh()
         )
-        self.log_std_parameter = nn.Parameter(torch.zeros(self.num_actions))
+        self.log_std_parameter = nn.Parameter(torch.zeros(self.num_actions, device=device))
 
     def compute(self, inputs, role):
         states = unflatten_tensorized_space(self.observation_space, inputs["states"])
-        img = states["img"]
-        goal = states["goal"]
-        memory = states["memory"]
-        graph_flat = states["graph"]
-        gt_orientation = states["orientation"]
-        
+        img = states["img"].to(self.device)
+        graph_flat = states["graph"].to(self.device)
+        gt_orientation = states["orientation"].to(self.device)
 
-        with torch.no_grad():
-            graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
+        # В PPO graph_encoder обучается через policy
+        graph_emb = self.graph_encoder(graph_flat)
 
-            if True:
-                collect_orientation_data(gt_orientation, pred_angle)
-                print_orientation_accuracy()
-
-        # print("gt angle: ", gt_orientation)
-        # print("angle: ", pred_angle)
-        # random_orientation = (torch.rand_like(gt_orientation) * 2 * torch.pi) - torch.pi
         x = torch.cat([img, gt_orientation], dim=-1)
-        return self.net(x), self.log_std_parameter, {}
-
-
-class Critic(DeterministicMixin, Model):
-    def __init__(self, observation_space, action_space, device,
-                 graph_encoder, orient_module, clip_actions=False):
-        Model.__init__(self, observation_space, action_space, device)
-        DeterministicMixin.__init__(self, clip_actions)
-
-        # Не регистрируем — SAC optimizer их не увидит
-        self.__dict__["graph_encoder"] = graph_encoder
-        self.__dict__["orient_module"] = orient_module
-
-        img_dim = int(observation_space["img"].shape[0])
-        goal_dim = int(observation_space["goal"].shape[0])
-        memory_dim = int(observation_space["memory"].shape[0])
-        mlp_in = img_dim + self.num_actions + 1
-
-        self.net = nn.Sequential(
-            nn.Linear(mlp_in, 512), nn.ReLU(),
-            nn.Linear(512, 256), nn.ReLU(),
-            nn.Linear(256, 1),
-        )
-
-    def compute(self, inputs, role):
-        states = unflatten_tensorized_space(self.observation_space, inputs["states"])
-        img = states["img"]
-        goal = states["goal"]
-        graph_flat = states["graph"]
-        memory = states["memory"]
-        actions = inputs["taken_actions"]
-        gt_orientation = states["orientation"]
-
-        with torch.no_grad():
-            graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
-
-        x = torch.cat([img, actions, gt_orientation], dim=-1)
-        return self.net(x), {}
+        mu = self.net(x)
+        return mu, self.log_std_parameter, {}
 
 
 # =====================================================================
-# Auxiliary trainer: обучает GraphEncoder + OrientationModule из buffer
+# PPO Value Function
+# =====================================================================
+class Value(DeterministicMixin, Model):
+    """Value function для PPO: не обучает auxiliary модули
+    
+    На вход: img + gt_orientation
+    На выход: скалярное значение V(s)
+    """
+    def __init__(self, observation_space, action_space, device,
+                 graph_encoder, orient_module,
+                 clip_actions=False):
+        Model.__init__(self, observation_space, action_space, device)
+        DeterministicMixin.__init__(self, clip_actions)
+
+        # Value function НЕ обучает auxiliary модули - использует их через no_grad
+        self.__dict__["graph_encoder"] = graph_encoder
+        self.__dict__["orient_module"] = orient_module
+
+        img_dim = int(observation_space["img"].shape[0])
+        mlp_in = img_dim + 1  # img + gt_orientation
+
+        self.net = nn.Sequential(
+            nn.Linear(mlp_in, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
+        )
+
+    def compute(self, inputs, role):
+        states = unflatten_tensorized_space(self.observation_space, inputs["states"])
+        img = states["img"].to(self.device)
+        graph_flat = states["graph"].to(self.device)
+        gt_orientation = states["orientation"].to(self.device)
+
+        # Value function не обучает graph - используем no_grad
+        with torch.no_grad():
+            graph_emb = self.graph_encoder(graph_flat)
+
+        x = torch.cat([img, gt_orientation], dim=-1)
+        v = self.net(x)
+        return v, {}
+
+
+# =====================================================================
+# Auxiliary trainer: обучает GraphEncoder + OrientationModule
 # =====================================================================
 class AuxModuleTrainer:
     """
     Отдельный trainer для GraphEncoder и OrientationModule.
-    Обучается из replay buffer агента, не трогает actor/critic.
+    Обучается из replay buffer агента (PPO), не трогает actor/critic.
     """
     def __init__(self, graph_encoder, orient_module, agent,
                  obs_space, device,
@@ -477,7 +458,6 @@ class AuxModuleTrainer:
 
             s = unflatten_tensorized_space(self.obs_space, processed)
             img = s["img"]
-            memory = s["memory"]
             graph_flat = s["graph"]
             gt_yaw = s["orientation"]
 
@@ -485,7 +465,7 @@ class AuxModuleTrainer:
             graph_emb = self.graph_encoder(graph_flat)
             pred_angle, probs, logits = self.orient_module(img, graph_emb)
 
-            # Loss (градиенты текут и в orient, и в graph)
+            # Loss (градиенты текут в обе стороны)
             loss, metrics = self.orient_module.compute_loss(logits, probs, gt_yaw)
 
             # Backward + step для обоих оптимизаторов
@@ -502,7 +482,7 @@ class AuxModuleTrainer:
                 self._metrics[k] = self._metrics.get(k, 0.0) + v
             self._metric_count += 1
 
-        # Actor/Critic используют eval-режим модулей
+        # Модули используются в eval-режиме в policy/value
         self.graph_encoder.eval()
         self.orient_module.eval()
 
