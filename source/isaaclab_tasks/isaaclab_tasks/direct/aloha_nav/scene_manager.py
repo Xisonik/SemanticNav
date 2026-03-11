@@ -888,6 +888,22 @@ class SceneManager:
     def get_active_goal_state(self, env_ids: torch.Tensor):
         return self.goal_positions[env_ids]
     
+    def place_robot_for_goal_stage_4(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
+        num_envs = len(env_ids)
+
+        final_robot_positions = torch.zeros((num_envs, 2), device=self.device)
+        choices = torch.tensor([-torch.pi/2, torch.pi/2], device=self.device)
+        indices = torch.randint(0, 2, (num_envs,), device=self.device)
+        final_yaw = choices[indices]
+        
+        robot_quats = torch.zeros(num_envs, 4, device=self.device)
+        robot_quats[:, 0] = torch.cos(final_yaw / 2.0)
+        robot_quats[:, 3] = torch.sin(final_yaw / 2.0)
+
+        # print(env_ids, final_robot_positions)
+        self.remove_colliding_obstacles(env_ids, final_robot_positions)
+        return final_robot_positions, robot_quats
+
     def place_robot_for_goal_stage_3(self, config, env_ids: torch.Tensor, mean_dist: float, min_dist: float, max_dist: float, angle_error: float):
         num_envs = len(env_ids)
         goal_pos = self.goal_positions[env_ids]

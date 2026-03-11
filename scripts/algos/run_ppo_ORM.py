@@ -64,7 +64,7 @@ if VIDEO:
     headless = True
 elif LIVESTREAM:
     cli_args = ["--enable_cameras", "--livestream", "2"]
-    num_envs = 4
+    num_envs = 1
     headless = True
 else:
     cli_args = ["--enable_cameras"]
@@ -166,7 +166,7 @@ agent = PPO(
     models=models, memory=memory, cfg=cfg,
     observation_space=env.observation_space,
     action_space=env.action_space, device=device,
-)
+    comet_experiment = experiment)
 
 # Auxiliary trainer + callback
 aux_trainer = AuxModuleTrainer(
@@ -237,13 +237,13 @@ if not EVAL:
     trainer.train()
 else:
     checkpoint_path = "logs/skrl/aloha_ppo"
-    agent_path = f"{checkpoint_path}/agent_50000.pt"
+    agent_path = f"{checkpoint_path}/26-03-11_17-17-29-750063_PPO/checkpoints/agent_4000.pt"
     agent.load(agent_path)
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/graph_encoder_30000.pt")
+        torch.load(f"{checkpoint_path}/added/graph_encoder_4000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/orient_module_30000.pt")
+        torch.load(f"{checkpoint_path}/added/orient_module_4000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()
@@ -251,3 +251,4 @@ else:
     print_orientation_accuracy(True)
     metrics = env.unwrapped.get_metrics()
     print(metrics)
+     

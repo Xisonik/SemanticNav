@@ -159,7 +159,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
         self.CL_ON = False
-        self.stage = 2
+        self.stage = 4
         self.use_staff = True
         self.use_obstacles = False
         self.use_controller = False
@@ -252,7 +252,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.setup_omni_warning_handler()
         self.first_nan = True
         self.controlled_env_ids = set()
-        self.control_percentage = 0.15
+        self.control_percentage = 0
         self.assistance_ratio = 0
         self.assistance_num_envs = 0
         self.TURN_TASK = True
@@ -514,8 +514,8 @@ class WheeledRobotEnv(DirectRLEnv):
         #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
         relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
         # obs_img = torch.cat([embedding, ], dim=-1)
-        if self.EVAL:
-            print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
+        # if self.EVAL:
+        # print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
         # print(self.to_local(self._desired_pos_w).shape)
         obs = {
             "img": image_embeddings.unsqueeze(1),          # нормализуем
@@ -611,10 +611,9 @@ class WheeledRobotEnv(DirectRLEnv):
         goal_reached, num_subs, r_error, a_error = self.goal_reached(get_num_subs=True)
         gamma = 0.99
         if self.TURN_TASK:
-            turnes =  torch.clamp(2 * math.pi * (self.previous_angle_error - a_error) / 180 , min=-1, max=1) # TODO: change to distance
             F_s = -self.previous_angle_error 
             F_s_next = -a_error
-            turnes += gamma * math.pi * (F_s_next - F_s)/ 180
+            turnes = gamma * (F_s_next - F_s) / 10
             self.previous_angle_error = a_error
         else:
             progress = self.previous_distance_error - r_error  # >0 если ближе к цели
@@ -622,11 +621,9 @@ class WheeledRobotEnv(DirectRLEnv):
 
         has_contact = torch.logical_or(self.get_contact(), self.out_of_bounds())
 
-        progress = self.previous_distance_error - r_error  # >0 если ближе к цели
-        turnes = gamma * progress
-        collision_penalty = -2.0 * has_contact.float()
-        goal_bonus = 6.0 * goal_reached.float()
-        reward = -0.01 + turnes + collision_penalty + goal_bonus
+        collision_penalty = -3.0 * has_contact.float()
+        goal_bonus = 5.0 * goal_reached.float()
+        reward = -0.05 + turnes + collision_penalty + goal_bonus
 
         died, _ = self._get_dones(self.my_episode_lenght - 1, inner=True)
         if torch.any(died):

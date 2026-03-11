@@ -300,8 +300,6 @@ class DictRunningStandardScaler(nn.Module):
                 size=goal_space, epsilon=epsilon,
                 clip_threshold=clip_threshold, device=device,
             )
-        else:
-            self.goal_scaler = None
 
     def forward(self, x, train=False, inverse=False, no_grad=True):
         s = unflatten_tensorized_space(self.full_space, x)

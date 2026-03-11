@@ -84,10 +84,7 @@ else:
         num_envs=num_envs,
         cli_args=cli_args
     )
-# env = RolloutVideoWrapper(env, experiment, episode_frequency=10)
-
-
-env = RolloutVideoWrapper(env, experiment, episode_frequency=1)
+# env = RolloutVideoWrapper(env, experiment, episode_frequency=1)
 if VIDEO:
     env = RecordVideo(
         env,
