@@ -229,8 +229,8 @@ class WheeledRobotEnv(DirectRLEnv):
         self.success_stacks = [[] for _ in range(self.num_envs)]  # Список списков для каждой среды
         self.max_stack_size = 10  # Максимальный размер стека
         self.sr_stack_full = False
-        self.start_mean_radius = 2
-        self.min_level_radius = 2
+        self.start_mean_radius = 0
+        self.min_level_radius = 0
         self.sr_treshhold = 85
         self.LOG = False
         self.text_embeddings = torch.zeros((self.num_envs, 512), device=self.device)

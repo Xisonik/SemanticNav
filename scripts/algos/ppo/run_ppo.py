@@ -26,7 +26,7 @@ set_seed(42)
     headless=True,
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
-TASK_NAME = "Aloha_nav" 
+TASK_NAME = "Aloha_turn" 
 EVAL = False
 VIDEO = False
 num_envs = 4
