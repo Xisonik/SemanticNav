@@ -28,6 +28,7 @@ __pycache__/
 *.pt
 *.pth
 *.ckpt
+_isaac_sim
 source/isaaclab_assets/data/aloha_assets/SimReady_Furniture
 .vscode/launch.json
 .vscode/settings.json

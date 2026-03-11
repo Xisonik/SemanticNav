@@ -427,14 +427,14 @@ class SAC(Agent):
             if 'orientation_loss' in critic_1_outputs:
                 orient_loss = critic_1_outputs['orientation_loss']
                 # orient_accuracy = critic_1_outputs.get('orientation_accuracy', None)
-                localization_weight = 1.2 #1.2  # НАЧНИ С МАЛОГО ВЕСА
+                localization_weight = 1.2 #1.2
                 # if orient_accuracy.item() > 0.90:
                 #     localization_weight = 0.6
                 # if orient_accuracy.item() > 0.97:
                 #     localization_weight = 0.1
                 # КРИТИЧНО: ДОБАВЛЯЕМ К CRITIC LOSS
                 # print("CHECK MY: ", critic_loss, orient_loss, localization_weight * orient_loss)
-                critic_loss = critic_loss + localization_weight * orient_loss
+                critic_loss = 0.3*critic_loss + localization_weight * orient_loss
                 
                 # Логирование (только первый gradient step каждого update)
                 if self.write_interval > 0 and gradient_step == 0:

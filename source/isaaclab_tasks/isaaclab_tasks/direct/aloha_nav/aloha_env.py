@@ -593,6 +593,7 @@ class WheeledRobotEnv(DirectRLEnv):
             self._actions = actions.clone().clamp(-1.0, 1.0)
             linear_speed = 0.0*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
+
             if self.DEF_TURN:
                 linear_speed = torch.zeros_like(self._actions[:, 0])
                 angular_speed = torch.full_like(self._actions[:, 1], -2.0)
@@ -619,7 +620,10 @@ class WheeledRobotEnv(DirectRLEnv):
             progress = self.previous_distance_error - r_error  # >0 если ближе к цели
             turnes = gamma * progress
 
-        has_contact = self.get_contact()
+        has_contact = torch.logical_or(self.get_contact(), self.out_of_bounds())
+
+        progress = self.previous_distance_error - r_error  # >0 если ближе к цели
+        turnes = gamma * progress
         collision_penalty = -2.0 * has_contact.float()
         goal_bonus = 6.0 * goal_reached.float()
         reward = -0.01 + turnes + collision_penalty + goal_bonus
@@ -1237,7 +1241,20 @@ class WheeledRobotEnv(DirectRLEnv):
         omni_logger.addHandler(handler)
         omni_logger.setLevel(logging.WARNING)
 
-    def render(self):
+    def get_environment_which_is_closest_to_camera_lookat(self):
+        env_positions = self._terrain.env_origins
+        camera_lookat = torch.tensor(self.cfg.viewer.lookat).to(env_positions.device)
+
+        # Small substraction to prefer environments which are closer from
+        # positive side
+        distances = torch.linalg.norm(env_positions - camera_lookat - 0.001, dim=-1)
+
+        closest_env_idx = distances.argmin().item()
+        return closest_env_idx
+
+    def render_fpv(self):
         assert self.CAMERA, "Render is only available when CAMERA mode is enabled."
-        camera_data = self._tiled_camera.data.output["rgb"].clone()  # Shape: (num_envs, 224, 224, 3)
-        return camera_data.permute(0, 3, 1, 2)
+        # Choose an environment which is closest to the origin. A small number (0.001)
+        # is substracted to prefer environments with origins
+        camera_data = self._tiled_camera.data.output["rgb"].clone().cpu().numpy()  # Shape: (num_envs, 224, 224, 3)
+        return camera_data

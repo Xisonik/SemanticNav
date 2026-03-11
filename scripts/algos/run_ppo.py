@@ -26,17 +26,17 @@ set_seed(42)
     headless=True,
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
-TASK_NAME = "Aloha_nav" 
+TASK_NAME = "Aloha_turn" 
 EVAL = False
 VIDEO = False
-num_envs = 20
+num_envs = 4
 timestepslen = 300000
 headless = True
 
 if EVAL:
     timestepslen = 800
 
-cli_args = ["--enable_cameras"]
+cli_args = ["--enable_cameras", "--video"]
 
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
@@ -61,7 +61,7 @@ else:
         headless=headless, 
         cli_args=cli_args
     )
-    env = RolloutVideoWrapper(env, experiment, episode_frequency=10)
+    env = RolloutVideoWrapper(env, experiment, episode_frequency=100)
 
 env = wrap_env(env)
 device = env.device
@@ -72,7 +72,7 @@ graph_encoder = GraphEncoder(
 ).to(device)
 
 # Должно быть соразмерно с временем, за которое можно в теории добраться до целевого объекта.
-memory = RandomMemory(memory_size = 200, num_envs = env.num_envs)
+memory = RandomMemory(memory_size = 500, num_envs = env.num_envs)
 
 models = {
     "policy": Policy(
@@ -88,9 +88,9 @@ models = {
 # TODO change at least learning rate. It looks to big for standard PPO implementation.
 # Maybe change some other hyperparameters.
 cfg = PPO_DEFAULT_CONFIG.copy()
-mini_batch_size = 256
+mini_batch_size = 128
 
-cfg['rollouts'] = 200
+cfg['rollouts'] = 500
 cfg['orientation_loss_weight'] = 0.
 cfg['learning_epochs'] = 10
 cfg['learning_rate'] = 3e-4

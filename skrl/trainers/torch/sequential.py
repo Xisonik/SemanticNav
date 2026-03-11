@@ -112,6 +112,9 @@ class SequentialTrainer(Trainer):
 
                 # print("action before: ", actions)
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions)
+                true_next_states = next_states
+                if infos['true_next_obs'] is not None:
+                    true_next_states = infos['true_next_obs']
                 # print("action after: ", actions)
                 # render scene
                 if not self.headless:
@@ -123,7 +126,7 @@ class SequentialTrainer(Trainer):
                         states=states[scope[0] : scope[1]],
                         actions=actions[scope[0] : scope[1]],
                         rewards=rewards[scope[0] : scope[1]],
-                        next_states=next_states[scope[0] : scope[1]],
+                        next_states=true_next_states[scope[0] : scope[1]],
                         terminated=terminated[scope[0] : scope[1]],
                         truncated=truncated[scope[0] : scope[1]],
                         infos=infos,

@@ -15,7 +15,13 @@ from ppo.helper import RolloutVideoWrapper
 from networks.networks_orm import *
 set_seed(42)
 
-
+from comet_ml import start
+from comet_ml.integration.pytorch import log_model
+experiment = start(
+    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
+    project_name="robo",
+    workspace="denmanorwat"
+)
 
 """
 - Пайплайны:
@@ -80,6 +86,8 @@ else:
     )
 # env = RolloutVideoWrapper(env, experiment, episode_frequency=10)
 
+
+env = RolloutVideoWrapper(env, experiment, episode_frequency=1)
 if VIDEO:
     env = RecordVideo(
         env,
@@ -196,8 +204,8 @@ def _post_with_aux(timestep, timesteps):
 
     if timestep % 2000 == 0:
         save_dir = cfg["experiment"]["directory"]
-        torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
-        torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
+        #torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
+        #torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
     # if timestep % 2000 == 0:
     #     memory.save(directory="logs/skrl/memory")
     if timestep % 50 == 0:

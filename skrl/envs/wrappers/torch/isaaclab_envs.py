@@ -65,6 +65,9 @@ class IsaacLabWrapper(Wrapper):
         else:
             observation_space = self.observation_space
         self._observations = flatten_tensorized_space(tensorize_space(observation_space, observations["policy"]))
+        if self._info['true_next_obs'] is not None:
+            self._info['true_next_obs'] =\
+                flatten_tensorized_space(tensorize_space(observation_space, self._info['true_next_obs']['policy']))
         return self._observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
 
     def reset(self) -> Tuple[torch.Tensor, Any]:
