@@ -7,6 +7,7 @@ rm -rf /root/SemanticNav/source/isaaclab_assets/data/
 mkdir -p /root/SemanticNav/source/isaaclab_assets/data/
 unzip aloha_assets.zip -d /root/SemanticNav/source/isaaclab_assets/data/
 rm -rf /root/SemanticNav/data/all_paths.json
+mkdir /root/SemanticNav/data/
 mv all_paths.json /root/SemanticNav/data/
 rm -rf /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/text_embeddings.pt
 mv text_embeddings.pt /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/
