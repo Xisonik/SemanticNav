@@ -190,7 +190,6 @@ class WheeledRobotEnv(DirectRLEnv):
         self.my_episode_lenght = 256
         self.turn_off_controller_step = 0
         
-        
         if self.turn_on_obstacles_always:
             self.use_obstacles = True
         self.previous_distance_error = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
@@ -230,8 +229,8 @@ class WheeledRobotEnv(DirectRLEnv):
         self.success_stacks = [[] for _ in range(self.num_envs)]  # Список списков для каждой среды
         self.max_stack_size = 10  # Максимальный размер стека
         self.sr_stack_full = False
-        self.start_mean_radius = 0
-        self.min_level_radius = 0
+        self.start_mean_radius = 2
+        self.min_level_radius = 2
         self.sr_treshhold = 85
         self.LOG = False
         self.text_embeddings = torch.zeros((self.num_envs, 512), device=self.device)
