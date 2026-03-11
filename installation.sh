@@ -14,6 +14,7 @@ mv text_embeddings.pt /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks/dir
 cd /root
 rm -rf /root/tmp
 
+cd /root/SemanticNav
 export ISAACSIM_PATH="/root/isaacsim"
 export ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
 ln -s ${ISAACSIM_PATH} _isaac_sim
