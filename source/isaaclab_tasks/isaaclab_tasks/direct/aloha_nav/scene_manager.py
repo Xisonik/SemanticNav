@@ -405,7 +405,7 @@ class SceneManager:
 
         self.placement_strategies = self._initialize_strategies()
 
-        self.robot_radius = 0.5
+        self.robot_radius = 0.4
         self.room_bounds = {'x_min': -5, 'x_max': 5, 'y_min': -5, 'y_max': 5}
         self.goal_positions = torch.zeros((num_envs, 3), device=self.device)
 
@@ -947,10 +947,10 @@ class SceneManager:
         # print("candidates: ", candidates)
         bounds = self.room_bounds
         in_bounds_mask = (
-            (candidates[..., 0] >= bounds['x_min'] + self.robot_radius) &
-            (candidates[..., 0] <= bounds['x_max'] - self.robot_radius) &
-            (candidates[..., 1] >= bounds['y_min'] + self.robot_radius) &
-            (candidates[..., 1] <= bounds['y_max'] - self.robot_radius)
+            (candidates[..., 0] >= bounds['x_min'] + 1.5 + self.robot_radius) &
+            (candidates[..., 0] <= bounds['x_max'] - 1.5 - self.robot_radius) &
+            (candidates[..., 1] >= bounds['y_min'] + 1.5 + self.robot_radius) &
+            (candidates[..., 1] <= bounds['y_max'] - 1.5 - self.robot_radius)
         )
         # print("in_bounds_mask: ", in_bounds_mask)
         in_bounds_mask_float = in_bounds_mask.float() + 1e-9

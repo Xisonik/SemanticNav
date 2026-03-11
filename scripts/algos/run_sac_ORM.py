@@ -48,7 +48,7 @@ timestepslen = 100000
 headless = True
 
 if EVAL or VIDEO:
-    timestepslen = 300
+    timestepslen = 1000
 
 if VIDEO:
     cli_args = ["--enable_cameras", "--video", "--livestream", "2"]
@@ -57,7 +57,7 @@ if VIDEO:
     headless = True
 elif LIVESTREAM:
     cli_args = ["--enable_cameras", "--livestream", "2"]
-    num_envs = 2
+    num_envs = 4
     headless = True
 else:
     cli_args = ["--enable_cameras"]
@@ -78,7 +78,7 @@ else:
         num_envs=num_envs,
         cli_args=cli_args
     )
-env = RolloutVideoWrapper(env, experiment, episode_frequency=10)
+# env = RolloutVideoWrapper(env, experiment, episode_frequency=10)
 
 if VIDEO:
     env = RecordVideo(
@@ -104,7 +104,7 @@ orient_module.eval() # custom trainer turn it to train in train steps
 
 memory_size = 1500
 if num_envs == 128:
-    memory_size = 1400
+    memory_size = 1500
 elif num_envs == 64:
     memory_size = 2000
 elif num_envs == 32:
@@ -202,12 +202,17 @@ def _post_with_aux(timestep, timesteps):
     #     memory.save(directory="logs/skrl/memory")
     if timestep % 50 == 0:
         metrics = env.unwrapped.get_metrics()
+        # print(metrics)
         if timestep % 2000 == 0:
             print(metrics)
         acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
         experiment.log_metric("success_rate", metrics["success_rate"], step=timestep)
         experiment.log_metric("mean_radius", metrics["mean_radius"], step=timestep)
         experiment.log_metric("angle_error", metrics["cur_angle_error"], step=timestep)
+        experiment.log_metric("stage", metrics["stage"], step=timestep)
+        experiment.log_metric("avg_episode_length", metrics["avg_episode_length"], step=timestep)
+        experiment.log_metric("assistance_ratio", metrics["assistance_ratio"], step=timestep)
+        experiment.log_metric("assistance_num_envs", metrics["assistance_num_envs"], step=timestep)
         experiment.log_metric("accuracy orientation module 10 grad", acc_10, step=timestep)
         experiment.log_metric("accuracy orientation module 20 grad", acc_20, step=timestep)
         experiment.log_metric("accuracy orientation module 30 grad", acc_30, step=timestep)
@@ -251,16 +256,16 @@ if not EVAL:
 else:
     # memory.load(directory="logs/skrl/aloha_sac/memory")
     # agent._state_preprocessor.load_state_dict(
-    #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt")
+    #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt") archive/memory
     # )
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
-    agent_path = f"{checkpoint_path}/26-03-05_00-45-11-750192_SAC/checkpoints/agent_39000.pt"
+    agent_path = f"{checkpoint_path}/26-03-10_23-34-50-145979_SAC/checkpoints/agent_50000.pt"
     agent.load(agent_path)
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/archive/memory/graph_encoder_36000.pt")
+        torch.load(f"{checkpoint_path}/added/graph_encoder_30000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/archive/memory/orient_module_36000.pt")
+        torch.load(f"{checkpoint_path}/added/orient_module_30000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()

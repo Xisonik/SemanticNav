@@ -30,6 +30,7 @@ from .asset_manager import AssetManager
 import omni.kit.commands
 import datetime
 import torch.nn.functional as F
+import random
 
 from isaaclab_assets.robots.aloha import ALOHA_CFG
 from transformers import CLIPProcessor, CLIPModel
@@ -163,7 +164,10 @@ class WheeledRobotEnv(DirectRLEnv):
         self.use_obstacles = True
         self.use_controller = True
         self.imitation = False
-        
+        self.cur_angle_error = 0
+        self.mean_radius = 0
+        self.warm_len = 10
+
         self.turn_on_obstacles = False
         self.turn_on_obstacles_always = False
 
@@ -185,11 +189,8 @@ class WheeledRobotEnv(DirectRLEnv):
 
         self.set_debug_vis(self.cfg.debug_vis)
 
-        self.turn_on_controller = self.use_controller #it is not use or not use controller, it is flag for the first step
         self.turn_on_controller_step = 0
-        self.my_episode_lenght = 256
-        self.turn_off_controller_step = 0
-        
+        self.my_episode_lenght = 256        
         
         if self.turn_on_obstacles_always:
             self.use_obstacles = True
@@ -203,13 +204,9 @@ class WheeledRobotEnv(DirectRLEnv):
         self.sr_stack_capacity = 0
 
         self._step_update_counter = 0
-        self.mean_radius = 5
         self.max_angle_error = 1 * torch.pi
-        self.cur_angle_error = 1 * torch.pi
-
 
         self.warm = True
-        self.warm_len = 2000
         self.without_imitation = self.warm_len / 2
         self.without_imitation_log = False
         self.success_ep_num = 0
@@ -254,6 +251,62 @@ class WheeledRobotEnv(DirectRLEnv):
         self.nan_detector = NaNDetector(self.history_tracker, "./nan_debug", raise_on_nan=True)
         self.setup_omni_warning_handler()
         self.first_nan = True
+        self.controlled_env_ids = set()
+        self.control_percentage = 0.15
+        self.assistance_ratio = 0
+        self.assistance_num_envs = 0
+        self.TURN_TASK = True
+        self.DEF_TURN = False
+        self._update_controlled_envs()
+
+    def _update_controlled_envs(self, env_ids = None):
+        """
+        Быстрое заполнение управляемых сред.
+        
+        Если available >= нужно добавить → выбираем ровно столько сразу.
+        Если available < нужно → берем все что есть.
+        """
+        # Вычисляем целевой процент (верхняя граница 0.6)
+        self.control_percentage = max(0.10, min(0.60, 0.9 - 0.8 * (self.success_rate / 100.0)))
+        target_count = max(1, int(self.num_envs * self.control_percentage))
+        
+        if env_ids is None:
+            while len(self.controlled_env_ids) > target_count:
+                self.controlled_env_ids.discard(random.choice(list(self.controlled_env_ids)))
+            return self.control_percentage
+        
+        # Кандидаты берем ТОЛЬКО из текущих env_ids
+        env_ids_set = set(int(e.item()) for e in env_ids)
+        available = env_ids_set - self.controlled_env_ids
+        
+        # Сколько нужно добавить
+        need_to_add = target_count - len(self.controlled_env_ids)
+        
+        # Быстрое заполнение: выбираем ровно столько сколько нужно
+        if need_to_add > 0 and available:
+            to_add_count = min(need_to_add, len(available))  # берем минимум из нужного и доступного
+            to_add = random.sample(list(available), to_add_count)
+            self.controlled_env_ids.update(to_add)
+        
+        # Удаляем лишние (если somehow перешли предел)
+        while len(self.controlled_env_ids) > target_count:
+            self.controlled_env_ids.discard(random.choice(list(self.controlled_env_ids)))
+        
+        # Специальные режимы
+        if self.imitation:
+            self.controlled_env_ids = set(range(self.num_envs))
+        elif not self.use_controller:
+            self.controlled_env_ids.clear()
+        
+        self.assistance_ratio = self.control_percentage
+        self.assistance_num_envs = len(self.controlled_env_ids)
+        
+        if self.cur_step % 256 == 0:
+            print(f"[CONTROL] SR={self.success_rate:.1f}% → {self.control_percentage:.1%} "
+                f"({len(self.controlled_env_ids)}/{self.num_envs} envs controlled)")
+        
+        return self.control_percentage
+
 
     def print_config_info(self):
         print("__________[ CONGIFG INFO ]__________")
@@ -296,9 +349,12 @@ class WheeledRobotEnv(DirectRLEnv):
         return {
             "success_rate": self.success_rate,
             "mean_radius": self.mean_radius,
+            "assistance_ratio": self.assistance_ratio,
+            "assistance_num_envs": self.assistance_num_envs,
             "max_angle_error": float(self.max_angle_error),
             "cur_angle_error": float(self.cur_angle_error),
             "episode_count": self.episode_count,
+            "stage": self.stage,
             "avg_episode_length": (
                 self.total_episode_length / self.episode_count 
                 if self.episode_count > 0 else 0
@@ -474,95 +530,97 @@ class WheeledRobotEnv(DirectRLEnv):
         return observations
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        env_ids = self._robot._ALL_INDICES.clone()
-        self._actions = actions.clone().clamp(-1.0, 1.0)
+        if not self.TURN_TASK:
+            env_ids = self._robot._ALL_INDICES.clone()
+            self._actions = actions.clone().clamp(-1.0, 1.0)
 
-        nan_mask = torch.isnan(self._actions) | torch.isinf(self._actions)
-        nan_indices = torch.nonzero(nan_mask.any(dim=1), as_tuple=False).squeeze()  # env_ids где любой action NaN/inf
-        if nan_indices.numel() > 0:
-            if self.first_nan:
-                self.first_nan = False
-                print(f"[MY WARNING] NaN/Inf in actions for envs: {nan_indices.tolist()}")
-                print(f"pos: {self.to_local(self._robot.data.root_pos_w)[nan_indices]}")
+            nan_mask = torch.isnan(self._actions) | torch.isinf(self._actions)
+            nan_indices = torch.nonzero(nan_mask.any(dim=1), as_tuple=False).squeeze()
+            if nan_indices.numel() > 0:
+                if self.first_nan:
+                    self.first_nan = False
+                    print(f"[MY WARNING] NaN/Inf in actions for envs: {nan_indices.tolist()}")
+                self._actions[nan_mask] = 0.0
+                actions[nan_mask] = 0.0
+
+            r = self.cfg.wheel_radius
+            L = self.cfg.wheel_distance
+            self._step_update_counter += 1
             
-            # ✅ ВМЕСТО exit() - заменяем на нули:
-            self._actions[nan_mask] = 0.0
-            actions[nan_mask] = 0.0
-        r = self.cfg.wheel_radius
-        L = self.cfg.wheel_distance
-        self._step_update_counter += 1
-        if self.turn_on_controller or self.imitation or self.random_actions:
-            if not self.random_actions:
+            # МАСКА управляемых сред
+            controlled_mask = torch.tensor(
+                [int(e.item()) in self.controlled_env_ids for e in env_ids],
+                dtype=torch.bool, device=self.device
+            )
+            
+            # ШАГ 1: считаем скорости из actions для ВСЕх сред (базовая RL)
+            linear_speed = 0.6 * (self._actions[:, 0] + 1.0)
+            angular_speed = 2 * self._actions[:, 1]
+            
+            # ШАГ 2: если есть управляемые → пересчитываем их через контроллер
+            if controlled_mask.any() or self.imitation:
                 self.turn_on_controller_step += 1
-                # Получаем текущую ориентацию (yaw) из кватерниона
+                
                 quat = self._robot.data.root_quat_w
                 siny_cosp = 2 * (quat[:, 0] * quat[:, 3] + quat[:, 1] * quat[:, 2])
                 cosy_cosp = 1 - 2 * (quat[:, 2] * quat[:, 2] + quat[:, 3] * quat[:, 3])
                 yaw = torch.atan2(siny_cosp, cosy_cosp)
-                linear_speed, angular_speed = self.control_module.compute_controls(
-                    self.to_local(self._robot.data.root_pos_w[:, :2],env_ids),
+                
+                # Получаем скорости от контроллера для ВСЕх сред
+                lin_sp_all, ang_sp_all = self.control_module.compute_controls(
+                    self.to_local(self._robot.data.root_pos_w[:, :2], env_ids),
                     yaw
                 )
-            else:
-                self.choose_speed_step += 1
-                if self.choose_speed_step > 8:
-                    self.choose_speed_step = 0
-                    possible_linear_speed = torch.tensor([0.2, 0.4, 0.6, 0.8, 1], device=self.device)
-
-                    # Случайный выбор угла для каждого окружения в env_ids
-                    E = len(env_ids)
-                    random_indices = torch.randint(0, len(possible_linear_speed), (E,), device=self.device)
-                    self.choosen_linear_speed = possible_linear_speed[random_indices]
-
-                    possible_angular_speed = torch.tensor([0, 1.6,  -1.6], device=self.device)
-
-                    # Случайный выбор угла для каждого окружения в env_ids
-                    E = len(env_ids)
-                    random_indices = torch.randint(0, len(possible_angular_speed), (E,), device=self.device)
-                    self.choosen_angular_speed = possible_angular_speed[random_indices]
-
-                linear_speed = self.choosen_linear_speed
-                angular_speed = self.choosen_angular_speed
-
-            self._actions[:, 0] = (linear_speed / 0.6) - 1
-            self._actions[:, 1] = angular_speed / 2
-            actions.copy_(self._actions.clamp(-1.0, 1.0))
+                
+                # Пересчитываем ТОЛЬКО управляемые среды
+                controlled_indices = torch.where(controlled_mask)[0]
+                linear_speed[controlled_indices] = lin_sp_all[controlled_indices]
+                angular_speed[controlled_indices] = ang_sp_all[controlled_indices]
+                
+                # Обновляем actions ТОЛЬКО для управляемых
+                self._actions[controlled_indices, 0] = (linear_speed[controlled_indices] / 0.6) - 1
+                self._actions[controlled_indices, 1] = angular_speed[controlled_indices] / 2
+                actions.copy_(self._actions.clamp(-1.0, 1.0))
+            
+            # ШАГ 3: переводим скорости в управления моторами
+            self.angular_speed = angular_speed
+            self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
+            self._left_wheel_vel = (linear_speed - (angular_speed * L / 2)) / r
+            self._right_wheel_vel = (linear_speed + (angular_speed * L / 2)) / r
         else:
-            self.turn_off_controller_step += 1
+            r = self.cfg.wheel_radius
+            L = self.cfg.wheel_distance
+            self._actions = actions.clone().clamp(-1.0, 1.0)
             linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
-
-        linear_speed = torch.zeros_like(linear_speed)
-        angular_speed = torch.ones_like(angular_speed)
-        self.angular_speed = angular_speed
-        self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
-        self._left_wheel_vel = (linear_speed - (angular_speed * L / 2)) / r
-        self._right_wheel_vel = (linear_speed + (angular_speed * L / 2)) / r
+            if self.DEF_TURN:
+                linear_speed = torch.zeros_like(self._actions[:, 0])
+                angular_speed = torch.full_like(self._actions[:, 1], -2.0)
+            self.angular_speed = angular_speed
+            self.velocities = torch.stack([linear_speed, angular_speed], dim=1)
+            self._left_wheel_vel = (linear_speed - (angular_speed * L / 2)) / r
+            self._right_wheel_vel = (linear_speed + (angular_speed * L / 2)) / r
 
     def _apply_action(self):
         wheel_velocities = torch.stack([self._left_wheel_vel, self._right_wheel_vel], dim=1).unsqueeze(-1).to(dtype=torch.float32)
         self.last_actions = wheel_velocities
         self._robot.set_joint_velocity_target(wheel_velocities, joint_ids=[self._left_wheel_id, self._right_wheel_id])
 
-
     def _get_rewards(self) -> torch.Tensor:
         goal_reached, num_subs, r_error, a_error = self.goal_reached(get_num_subs=True)
-
-        turnes =  torch.clamp(2 * math.pi * (self.previous_angle_error - a_error) / 180 , min=-1, max=1)
-
-        F_s = -self.previous_angle_error 
-        F_s_next = -a_error
         gamma = 0.99
-        turnes += gamma * math.pi * (F_s_next - F_s)/ 180
-        
-        self.previous_angle_error = a_error
+        if self.TURN_TASK:
+            turnes =  torch.clamp(2 * math.pi * (self.previous_angle_error - a_error) / 180 , min=-1, max=1) # TODO: change to distance
+            F_s = -self.previous_angle_error 
+            F_s_next = -a_error
+            turnes += gamma * math.pi * (F_s_next - F_s)/ 180
+            self.previous_angle_error = a_error
+        else:
+            progress = self.previous_distance_error - r_error  # >0 если ближе к цели
+            turnes = gamma * progress
 
         has_contact = self.get_contact()
-
-        progress = self.previous_distance_error - r_error  # >0 если ближе к цели
-        turnes = gamma * progress
         collision_penalty = -2.0 * has_contact.float()
-
         goal_bonus = 6.0 * goal_reached.float()
         reward = -0.01 + turnes + collision_penalty + goal_bonus
 
@@ -640,6 +698,8 @@ class WheeledRobotEnv(DirectRLEnv):
         num_conditions_met = conditions.sum(dim=1)  # shape [N], количество True в каждой строк
 
         returns = torch.logical_and(close_enough, facing_goal)
+        if self.TURN_TASK: #TODO: WRONG DOING
+            returns = facing_goal
         if get_num_subs == False:
             return returns
         return returns, num_conditions_met, distance_to_goal+0.1-radius_threshold, angle_degrees
@@ -658,48 +718,66 @@ class WheeledRobotEnv(DirectRLEnv):
         return high_contact_envs
 
     def update_success_rate(self, goal_reached):
-        if self.turn_on_controller:
+        """.
+        Управляемые среды (controlled_env_ids) не влияют на SR.
+        """
+        if len(self.controlled_env_ids) >= self.num_envs:
+            # Все среды управляемые, SR не считаем
             return torch.tensor(self.success_rate, device=self.device)
         
         # Получаем завершенные эпизоды
         died, time_out = self._get_dones(self.my_episode_lenght - 1, inner=True)
         completed = died | time_out
-        # print("died ", died, time_out, completed)
-
+        
         if torch.any(completed):
-            # Получаем релевантные среды среди завершенных
-            # Фильтруем завершенные среды, оставляя только релевантные
-            relevant_completed = self._robot._ALL_INDICES[completed] #relevant_env_ids[(relevant_env_ids.view(1, -1) == self._robot._ALL_INDICES[completed].view(-1, 1)).any(dim=0)]
-            success = goal_reached.clone()
-            # print("sucsess: ", success)
-            # Обновляем стеки для релевантных завершенных сред
-            for env_id in self._robot._ALL_INDICES.clone()[completed]:
-                env_id = env_id.item()
-                if not success[env_id]:#here idia is colulate all fault and sucess only on relative envs
-                    self.success_stacks[env_id].append(0)
-                elif env_id in relevant_completed:
-                    self.success_stacks[env_id].append(1)
+            # фильтруем только неуправляемые среды
+            all_env_ids = self._robot._ALL_INDICES.clone()
+            relevant_mask = torch.tensor(
+                [int(e.item()) not in self.controlled_env_ids for e in all_env_ids],
+                dtype=torch.bool, device=self.device
+            )
+            
+            completed_and_relevant = completed & relevant_mask
+            
+            if torch.any(completed_and_relevant):
+                relevant_completed = all_env_ids[completed_and_relevant]
+                success = goal_reached.clone()
                 
-                if len(self.success_stacks[env_id]) > self.max_stack_size:
-                    self.success_stacks[env_id].pop(0)
-        # Вычисляем процент успеха для всех сред с непустыми стеками
-        # Подсчитываем общий процент успеха по всем релевантным средам
+                # Обновляем стеки только для неуправляемых завершенных сред
+                for env_id in relevant_completed:
+                    env_idx = int(env_id.item())
+                    if not success[env_idx]:
+                        self.success_stacks[env_idx].append(0)
+                    else:
+                        self.success_stacks[env_idx].append(1)
+                    
+                    if len(self.success_stacks[env_idx]) > self.max_stack_size:
+                        self.success_stacks[env_idx].pop(0)
+        
+        # Считаем процент успеха только по неуправляемым средам с данными
         total_successes = 0
         total_elements = 0
         for env_id in range(self.num_envs):
+            if env_id in self.controlled_env_ids:
+                continue  # пропускаем управляемые
+            
             stack = self.success_stacks[env_id]
             if len(stack) == 0:
                 continue
             total_successes += sum(stack)
             total_elements += len(stack)
-        # Вычисляем процент успеха
+        
         self.sr_stack_capacity = total_elements
         if total_elements > 0:
             self.success_rate = (total_successes / total_elements) * 100.0
         else:
             self.success_rate = 0.0
-        if total_elements >= 2 * self.num_envs * 0.9:
+        
+        # Полный стек когда достаточно данных от неуправляемых сред
+        uncontrolled_count = self.num_envs - len(self.controlled_env_ids)
+        if total_elements >= 2 * uncontrolled_count * 0.9:
             self.sr_stack_full = True
+        
         return self.success_rate
     
     def out_of_bounds(self):
@@ -724,7 +802,7 @@ class WheeledRobotEnv(DirectRLEnv):
         """
         time_out = self.is_time_out(my_episode_lenght)
         
-        died = self.goal_reached() | self.get_contact() | self.out_of_bounds()
+        died = self.goal_reached(get_num_subs=False) | self.get_contact() | self.out_of_bounds()
 
         if not inner:
             self.episode_length_buf[died] = 0
@@ -772,38 +850,13 @@ class WheeledRobotEnv(DirectRLEnv):
         if self.CL_ON:
             self.curriculum_learning_module(env_ids) 
 
-        if self.turn_on_controller_step > self.my_episode_lenght and self.turn_on_controller:
+        if (self.sr_stack_full and
+            self.use_controller and
+            not self.first_ep[0] or
+            self.imitation):
+
             self.turn_on_controller_step = 0
-            self.turn_on_controller = False
-        
-        if self.use_controller:
-            cond_imitation = (
-                not self.warm and
-                self.sr_stack_full and
-                self.mean_radius > 2 and
-                self.use_controller and
-                not self.turn_on_controller and
-                not self.first_ep[0] and
-                self.turn_on_obstacles and
-                self.turn_off_controller_step > self.my_episode_lenght
-            )
-            if cond_imitation:
-                self.turn_on_controller_step = 0
-                self.turn_off_controller_step = 0
-                prob = lambda x: torch.rand(1).item() <= x
-                self.turn_on_controller = prob(0.01 * max(10, min(40, 100 - self.success_rate)))
-                print(f"turn controller: {self.turn_on_controller} with SR {self.success_rate}")
-            elif self.cur_step < self.warm_len:
-                if self.cur_step < self.without_imitation:
-                    self.turn_on_controller = False
-                else:
-                    if not self.without_imitation_log:
-                        print("start imitation on warm stage")
-                        self.without_imitation_log = True
-                    self.turn_on_controller = True
-        
-        if self.imitation:
-            self.turn_on_controller = True
+            self._update_controlled_envs(env_ids)
 
         if (((self.turn_on_obstacles_always or self.warm and (self.mean_radius >= 3.5 or self.mean_radius <= 1.5))) and not self.first_ep[0]) and self.use_obstacles: # 
             if self.turn_on_obstacles_always and self.cur_step % 300:
@@ -834,24 +887,22 @@ class WheeledRobotEnv(DirectRLEnv):
             print("WRANG STAGE")
         
         robot_pos  = robot_pos_local
-        if self.turn_on_controller or self.imitation:
-            if self.turn_on_controller_step == 0:
-                env_ids_for_control = self._robot._ALL_INDICES.clone()
-                robot_pos_for_control =  self.to_local(self._robot.data.default_root_state[env_ids_for_control, :2].clone(), env_ids_for_control)
-                robot_pos_for_control[env_ids, :2] = robot_pos[:, :2]
-                goal_pos_for_control = self.to_local(self._desired_pos_w[env_ids_for_control, :2].clone(), env_ids_for_control)
-                goal_pos_for_control[env_ids, :2] = goal_pos_local[:, :2]
-            else:
-                env_ids_for_control = env_ids
-                robot_pos_for_control = robot_pos
-                goal_pos_for_control = goal_pos_local[:, :2]
+        
+        if self.use_controller or self.imitation:
+            # Находим пути для всех ресетящихся (env_ids)
+            env_ids_for_control = env_ids  # только те что сейчас ресетятся
+            robot_pos_for_control = robot_pos
+            goal_pos_for_control = goal_pos_local[:, :2]
+            
             paths = None
             possible_try_steps = 3
-            obstacle_positions_list = self.scene_manager.get_active_obstacle_positions_for_path_planning(env_ids_for_control)
+            obstacle_positions_list = self.scene_manager.get_active_obstacle_positions_for_path_planning(
+                env_ids_for_control
+            )
+            
             for i in range(possible_try_steps):
                 paths = self.path_manager.get_paths(
                     env_ids=env_ids_for_control,
-                    # Передаем данные для генерации ключа
                     active_obstacles_by_type_list=obstacle_positions_list,
                     start_positions=robot_pos_for_control,
                     target_positions=goal_pos_for_control[:, :2]
@@ -860,12 +911,13 @@ class WheeledRobotEnv(DirectRLEnv):
                     print(f"[ ERROR ] GET NONE PATH {i + 1} times")
                     self.scene_manager.randomize_scene(
                         env_ids_for_control,
-                        mess=False, # или False, в зависимости от режима
+                        mess=False,
                         use_obstacles=self.turn_on_obstacles,
-                    )
-                    goal_pos_local = self.scene_manager.get_active_goal_state(env_ids_for_control)
-                    self._desired_pos_w[env_ids_for_control, :3] = goal_pos_local
-                    self._desired_pos_w[env_ids_for_control, :2] = self.to_global(goal_pos_local, env_ids_for_control)
+                    ) # type: ignore
+                    goal_pos_local_retry = self.scene_manager.get_active_goal_state(env_ids_for_control)
+                    self._desired_pos_w[env_ids_for_control, :3] = goal_pos_local_retry
+                    self._desired_pos_w[env_ids_for_control, :2] = self.to_global(goal_pos_local_retry, env_ids_for_control)
+                    goal_pos_for_control = goal_pos_local_retry[:, :2]
                 else:
                     break
             self.control_module.update_paths(env_ids_for_control, paths, goal_pos_for_control)
@@ -885,7 +937,6 @@ class WheeledRobotEnv(DirectRLEnv):
         # Логируем длину эпизодов для сброшенных сред
         self.total_episode_length += torch.sum(self.episode_lengths[env_ids]).item()
         self.episode_count += len(env_ids)
-        mean_episode_length = self.total_episode_length / self.episode_count if self.episode_count > 0 else 0.0
         # Сбрасываем счетчик длины для сброшенных сред
         self.episode_lengths[env_ids] = 0
         _, _, r_error, a_error = self.goal_reached(get_num_subs=True)
@@ -932,56 +983,83 @@ class WheeledRobotEnv(DirectRLEnv):
         return pos[:, :2] + env_origins[env_ids, :2]
 
     def curriculum_learning_module(self, env_ids: torch.Tensor):
-        if self.warm and self.cur_step >= self.warm_len:
-            self.warm = False
+        """
+        Stage-based curriculum learning:
+        
+        Stage 0 (Warm):   0 → 1024 steps
+                        Learning basics, all envs guided
+        
+        Stage 1 (Main):   1024+ steps → radius >= 6.0
+                        Increase difficulty (angle → radius)
+        
+        Stage 2 (Final):  radius >= 6.0+
+                        Maximum difficulty
+        """
+        
+        # ============ ПЕРЕХОДЫ МЕЖДУ СТЕЙДЖАМИ ============
+        
+        # Stage 0 → 1: по времени
+        if self.stage == 0 and self.cur_step >= self.warm_len:
+            self.stage = 1
             self.mean_radius = self.start_mean_radius
             self.cur_angle_error = 0
-            self._step_update_counter = 0
-            self.stage += 1
-            print(f"end worm stage r: {round(self.mean_radius, 2)}, a: {round(self.cur_angle_error, 2)}")
-        elif not self.warm and not self.turn_on_controller and self.sr_stack_full:
+            print(f"✓ [STAGE 0→1] Warm complete. Starting main training.")
+        
+        # Stage 1 → 2: по достижению радиуса
+        elif self.stage == 1 and self.mean_radius >= 6.0:
+            self.stage = 2
+            self.cur_angle_error = 0
+            print(f"✓ [STAGE 1→2] Final stage reached (radius={self.mean_radius:.1f}m)")
+        
+        # ============ ЛОГИКА СЛОЖНОСТИ (Stage 1+) ============
+        
+        if self.stage >= 1 and self.sr_stack_full:
             if self.success_rate >= self.sr_treshhold:
                 self.success_ep_num += 1
                 self.foult_ep_num = 0
-                if self.success_ep_num > self.num_envs:
+                if self.success_ep_num > 2000:
                     self.success_ep_num = 0
-                    old_mr = self.mean_radius
-                    old_a = self.cur_angle_error
-                    self.cur_angle_error += self.max_angle_error / 7
-                    print("[ sr ]: ", round(self.success_rate, 2), self.sr_stack_capacity)
-                    angle_treashhold = self.max_angle_error
-                    if self.cur_angle_error > angle_treashhold:
-                        self.cur_angle_error = 0
-                        if self.mean_radius == 0:
-                            self.mean_radius += 0.5
-                        else:
-                            self.mean_radius += 1
-                        print(f"udate [ UP ] r: from {round(old_mr, 2)} to {round(self.mean_radius, 2)}")
-                    else:
-                        print(f"udate [ UP ] r: {round(self.mean_radius, 2)} a: from {round(old_a, 2)} to {round(self.cur_angle_error, 2)}")
-                    self._step_update_counter = 0
-                    self.update_sr_stack()
-            elif self.success_rate <= 10 or (self._step_update_counter >= 4000 and self.success_rate <= self.sr_treshhold):
+                    self._increase_difficulty()
+            elif self.success_rate <= 30:
                 self.foult_ep_num += 1
                 if self.foult_ep_num > 2000:
                     self.success_ep_num = 0
                     self.foult_ep_num = 0
-                    old_mr = self.mean_radius
-                    if self.cur_angle_error == 0:
-                        if self.mean_radius <= 0.5:
-                            self.mean_radius = 0
-                        elif self.mean_radius <= 1:
-                            self.mean_radius = 0.5
-                        else:
-                            self.mean_radius += -0.5
-                        self.mean_radius = max(self.min_level_radius, self.mean_radius)
-                    self.cur_angle_error = 0
-                   
-                    self._step_update_counter = 0
-                    print("[ sr ]: ", round(self.success_rate, 2), self.sr_stack_capacity)
-                    print(f"udate [ DOWN ] r: from {round(old_mr, 2)} to {round(self.mean_radius, 2)}, a: {round(self.cur_angle_error, 2)}")
-                    self.update_sr_stack()
-        return None
+                    self._decrease_difficulty()
+
+    def _increase_difficulty(self):
+        """Увеличить сложность при высоком успехе"""
+        # Сначала увеличиваем углы
+        self.cur_angle_error += self.max_angle_error / 7
+        
+        # Когда углы исчерпаны → переходим на радиус
+        if self.cur_angle_error > self.max_angle_error:
+            self.cur_angle_error = 0
+            increment = 0.5 if self.mean_radius == 0 else 1.0
+            self.mean_radius = min(8.0, self.mean_radius + increment)
+        
+        print(f"[UP ↑] SR={self.success_rate:.0f}% → r={self.mean_radius:.1f}m, a={self.cur_angle_error:.2f}rad")
+        self._step_update_counter = 0
+        self.update_sr_stack()
+
+    def _decrease_difficulty(self):
+        """Уменьшить сложность при низком успехе"""
+        # Уменьшаем радиус
+        if self.cur_angle_error == 0:
+            if self.mean_radius <= 0.5:
+                self.mean_radius = 0
+            elif self.mean_radius <= 1:
+                self.mean_radius = 0.5
+            else:
+                self.mean_radius -= 0.5
+            
+            self.mean_radius = max(self.min_level_radius, self.mean_radius)
+        
+        self.cur_angle_error = 0
+        self._step_update_counter = 0
+        
+        print(f"[DOWN ↓] SR={self.success_rate:.0f}% → r={self.mean_radius:.1f}m")
+        self.update_sr_stack()
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         pass
@@ -1128,200 +1206,3 @@ class WheeledRobotEnv(DirectRLEnv):
         assert self.CAMERA, "Render is only available when CAMERA mode is enabled."
         camera_data = self._tiled_camera.data.output["rgb"].clone()  # Shape: (num_envs, 224, 224, 3)
         return camera_data.permute(0, 3, 1, 2)
-
-
-# ============================================================================
-# ПРОВЕРКА ФАКТИЧЕСКИХ ПОЗИЦИЙ ОБЪЕКТОВ В СИМУЛЯТОРЕ
-# ============================================================================
-
-def verify_object_positions(self, env_ids: torch.Tensor = None, verbose: bool = True) -> bool:
-    """
-    Проверяет, совпадают ли позиции объектов в scene_manager 
-    с реальными позициями в симуляторе.
-    
-    Args:
-        env_ids: какие окружения проверить (если None - все)
-        verbose: печатать ли отладку
-    
-    Returns:
-        True если все совпадает, False если есть рассинхронизация
-    """
-    if env_ids is None:
-        env_ids = self._robot._ALL_INDICES.clone()
-    
-    all_match = True
-    max_errors = []
-    
-    for name, object_instances in self.scene_objects.items():
-        if name not in self.scene_manager.object_map:
-            continue
-        
-        indices = self.scene_manager.object_map[name]['indices']
-        
-        for i, instance in enumerate(object_instances):
-            # Получаем ФАКТИЧЕСКИЕ позиции из симулятора
-            actual_root_state = instance.data.root_state  # [num_envs, 13]
-            actual_pos_w = actual_root_state[env_ids, :3]  # [len(env_ids), 3]
-            
-            # Получаем ОЖИДАЕМЫЕ позиции из scene_manager
-            scene_pos_local = self.scene_manager.positions[env_ids, indices[i], :3]  # [len(env_ids), 3]
-            
-            # Конвертируем в глобальные для сравнения
-            env_origins = self._terrain.env_origins[env_ids]  # [len(env_ids), 3]
-            expected_pos_w = scene_pos_local + env_origins
-            
-            # Вычисляем разницу
-            pos_error = torch.norm(actual_pos_w - expected_pos_w, dim=1)  # [len(env_ids)]
-            max_error = pos_error.max().item()
-            mean_error = pos_error.mean().item()
-            
-            max_errors.append((name, i, max_error, mean_error))
-            
-            # Проверяем, не превышена ли допустимая разница (10 см)
-            threshold = 0.1  # 10 см
-            if max_error > threshold:
-                all_match = False
-                if verbose:
-                    print(f"[MISMATCH] {name}_{i}: max_error={max_error:.4f}m, mean_error={mean_error:.4f}m")
-                    mismatched_envs = torch.where(pos_error > threshold)[0]
-                    for env_idx in mismatched_envs[:3]:  # показать первые 3
-                        actual = actual_pos_w[env_idx]
-                        expected = expected_pos_w[env_idx]
-                        print(f"  Env {env_ids[env_idx].item()}: actual={actual.tolist()}, "
-                              f"expected={expected.tolist()}, error={pos_error[env_idx]:.4f}m")
-    
-    if verbose:
-        if all_match:
-            print("\n✓ ВСЕ ПОЗИЦИИ СОВПАДАЮТ!\n")
-        else:
-            print(f"\n✗ НАЙДЕНА РАССИНХРОНИЗАЦИЯ! Максимальные ошибки:\n")
-            for name, idx, max_err, mean_err in sorted(max_errors, key=lambda x: x[2], reverse=True):
-                status = "✓ OK" if max_err < 0.1 else "✗ ERROR"
-                print(f"  {status} {name}_{idx}: max={max_err:.4f}m, mean={mean_err:.4f}m")
-            print()
-    
-    return all_match
-
-
-def check_object_positions_detailed(self, env_id: int = 0):
-    """
-    Детальная проверка позиций объектов для одного окружения.
-    
-    Args:
-        env_id: ID окружения для проверки
-    """
-    print(f"\n{'='*80}")
-    print(f"DETAILED POSITION CHECK - Environment {env_id}")
-    print(f"{'='*80}\n")
-    
-    print(f"{'Object':<20} | {'Actual Pos (X,Y,Z)':<40} | {'Expected Pos':<40} | Error")
-    print("-" * 150)
-    
-    for name, object_instances in self.scene_objects.items():
-        if name not in self.scene_manager.object_map:
-            continue
-        
-        indices = self.scene_manager.object_map[name]['indices']
-        
-        for i, instance in enumerate(object_instances):
-            # Фактическая позиция
-            actual_pos_w = instance.data.root_state[env_id, :3]
-            
-            # Ожидаемая позиция
-            scene_pos_local = self.scene_manager.positions[env_id, indices[i], :3]
-            env_origin = self._terrain.env_origins[env_id]
-            expected_pos_w = scene_pos_local + env_origin
-            
-            # Ошибка
-            error = torch.norm(actual_pos_w - expected_pos_w).item()
-            
-            actual_str = f"({actual_pos_w[0]:.3f}, {actual_pos_w[1]:.3f}, {actual_pos_w[2]:.3f})"
-            expected_str = f"({expected_pos_w[0]:.3f}, {expected_pos_w[1]:.3f}, {expected_pos_w[2]:.3f})"
-            status = "✓" if error < 0.1 else "✗"
-            
-            print(f"{name}_{i:<18} | {actual_str:<40} | {expected_str:<40} | {error:.4f}m {status}")
-
-
-def print_scene_state_snapshot(self, env_id: int = 0):
-    """
-    Полный снимок состояния сцены для одного окружения.
-    """
-    print(f"\n{'='*80}")
-    print(f"SCENE STATE SNAPSHOT - Environment {env_id}")
-    print(f"{'='*80}\n")
-    
-    # Позиция робота
-    robot_pos_w = self._robot.data.root_pos_w[env_id]
-    robot_pos_local = self.to_local(robot_pos_w.unsqueeze(0))[0]
-    print(f"Robot Position:")
-    print(f"  Global: ({robot_pos_w[0]:.3f}, {robot_pos_w[1]:.3f}, {robot_pos_w[2]:.3f})")
-    print(f"  Local:  ({robot_pos_local[0]:.3f}, {robot_pos_local[1]:.3f})")
-    
-    # Позиция цели
-    goal_pos_w = self._desired_pos_w[env_id]
-    goal_pos_local = self.to_local(goal_pos_w.unsqueeze(0))[0]
-    distance = torch.norm(robot_pos_w[:2] - goal_pos_w[:2]).item()
-    print(f"\nGoal Position:")
-    print(f"  Global: ({goal_pos_w[0]:.3f}, {goal_pos_w[1]:.3f}, {goal_pos_w[2]:.3f})")
-    print(f"  Local:  ({goal_pos_local[0]:.3f}, {goal_pos_local[1]:.3f})")
-    print(f"  Distance: {distance:.3f}m")
-    
-    # Активные объекты
-    print(f"\nActive Objects:")
-    active_count = 0
-    for name, object_instances in self.scene_objects.items():
-        if name not in self.scene_manager.object_map:
-            continue
-        
-        indices = self.scene_manager.object_map[name]['indices']
-        
-        for i, instance in enumerate(object_instances):
-            is_active = self.scene_manager.active[env_id, indices[i]].item()
-            if is_active:
-                active_count += 1
-                pos_w = instance.data.root_state[env_id, :3]
-                pos_local = self.to_local(pos_w.unsqueeze(0))[0]
-                print(f"  {name}_{i}: ({pos_local[0]:.2f}, {pos_local[1]:.2f})")
-    
-    print(f"\nTotal active objects: {active_count}/{self.scene_manager.num_total_objects}")
-    
-    # Столкновения
-    force_matrix = self.scene["contact_sensor"].data.net_forces_w
-    if force_matrix is not None and force_matrix.numel() > 0:
-        contact_forces = torch.norm(force_matrix, dim=-1)
-        num_contacts = (contact_forces[env_id] > 0.05).sum().item()
-        print(f"\nContact forces: {num_contacts} active contacts")
-    else:
-        print(f"\nContact forces: No contact data")
-    
-    # История в tracker
-    if hasattr(self, 'history_tracker'):
-        print(f"\nHistory tracker:")
-        print(f"  Steps tracked: {self.history_tracker.current_step}")
-        print(f"  Max history: {self.history_tracker.max_history}")
-
-
-def validate_positions_in_step(self, action: torch.Tensor):
-    """
-    Версия step() с встроенной проверкой позиций (для отладки).
-    """
-    obs_buf, reward_buf, reset_terminated, reset_time_outs, extras = super().step(action)
-    
-    # Записываем историю
-    self.history_tracker.record_step(
-        positions=self.scene_manager.positions,
-        names=self.scene_manager.names,
-        active=self.scene_manager.active,
-        step_number=int(self.common_step_counter)
-    )
-    
-    # ПРОВЕРКА: каждые 100 шагов
-    if self.common_step_counter % 100 == 0:
-        all_match = self.verify_object_positions(verbose=False)
-        if not all_match:
-            print(f"\n[WARNING] Position mismatch at step {self.common_step_counter}")
-            self.verify_object_positions(verbose=True)
-            # Можно добавить pdb.set_trace() для остановки
-    
-    return obs_buf, reward_buf, reset_terminated, reset_time_outs, extras
-
