@@ -591,7 +591,7 @@ class WheeledRobotEnv(DirectRLEnv):
             r = self.cfg.wheel_radius
             L = self.cfg.wheel_distance
             self._actions = actions.clone().clamp(-1.0, 1.0)
-            linear_speed = 0.6*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
+            linear_speed = 0.0*(self._actions[:, 0] + 1.0) # [num_envs], всегда > 0
             angular_speed = 2*self._actions[:, 1]  # [num_envs], оставляем как есть от RL
             if self.DEF_TURN:
                 linear_speed = torch.zeros_like(self._actions[:, 0])
