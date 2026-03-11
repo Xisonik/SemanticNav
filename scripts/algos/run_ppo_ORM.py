@@ -38,9 +38,9 @@ set_seed(42)
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
 experiment = start(
-    api_key="DRYfW6B6VtUQr9llvf3jup57R",
-    project_name="general",
-    workspace="xisonik"
+    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
+    project_name="robo",
+    workspace="denmanorwat"
 )
 
 
@@ -110,7 +110,7 @@ graph_encoder.eval()
 orient_module.eval() # custom trainer turn it to train in train steps
 
 # PPO Memory
-memory = RandomMemory(memory_size=48, num_envs=env.num_envs, device=device)
+memory = RandomMemory(memory_size=100, num_envs=env.num_envs, device=device)
 
 models = {
     "policy": Policy(
@@ -124,7 +124,7 @@ models = {
 }
 
 cfg = PPO_DEFAULT_CONFIG.copy()
-cfg["rollouts"] = 48  # должно совпадать с memory_size
+cfg["rollouts"] = 100  # должно совпадать с memory_size
 cfg["learning_epochs"] = 8
 cfg["mini_batches"] = 8
 
@@ -137,8 +137,8 @@ cfg["learning_rate_scheduler"] = None   # можно добавить scheduler
 
 # PPO-specific
 cfg["ratio_clip"] = 0.2                 # clipping parameter для PPO
-cfg["value_clip"] = 0.2                 # clipping для value loss
-cfg["clip_predicted_values"] = True     # включить value clipping
+cfg["value_clip"] = 0.                  # clipping для value loss
+cfg["clip_predicted_values"] = False     # включить value clipping
 
 # Regularization
 cfg["entropy_loss_scale"] = 0.01        # коэффициент entropy bonus
@@ -166,6 +166,7 @@ agent = PPO(
     models=models, memory=memory, cfg=cfg,
     observation_space=env.observation_space,
     action_space=env.action_space, device=device,
+    comet_experiment=experiment
 )
 
 # Auxiliary trainer + callback
@@ -191,8 +192,8 @@ def _post_with_aux(timestep, timesteps):
 
     if timestep % 2000 == 0:
         save_dir = cfg["experiment"]["directory"]
-        torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
-        torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
+        #torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
+        #torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
     
     if timestep % 50 == 0:
         metrics = env.unwrapped.get_metrics()

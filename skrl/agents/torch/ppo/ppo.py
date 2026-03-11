@@ -289,12 +289,13 @@ class PPO(Agent):
 
     def write_tracking_data(self, timestep: int, timesteps: int):
         for k, v in self.tracking_data.items():
-            if k.endswith("(min)"):
-                self.experiment.log_metrics({k: np.min(v)}, step = timestep)
-            elif k.endswith("(max)"):
-                self.experiment.log_metrics({k: np.max(v)}, step = timestep)
-            else:
-                self.experiment.log_metrics({k: np.mean(v)}, step = timestep)
+            if self.experiment is not None:
+                if k.endswith("(min)"):
+                    self.experiment.log_metrics({k: np.min(v)}, step = timestep)
+                elif k.endswith("(max)"):
+                    self.experiment.log_metrics({k: np.max(v)}, step = timestep)
+                else:
+                    self.experiment.log_metrics({k: np.mean(v)}, step = timestep)
         super().write_tracking_data(timestep = timestep, timesteps = timesteps)
 
     def _update(self, timestep: int, timesteps: int) -> None:
