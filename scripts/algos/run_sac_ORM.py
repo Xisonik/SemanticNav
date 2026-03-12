@@ -44,7 +44,7 @@ experiment = start(
 
 
 TASK_NAME = "Aloha_nav"
-EVAL = False
+EVAL = True
 VIDEO = False
 LIVESTREAM = False
 USE_PRETRAINED = True
@@ -54,7 +54,7 @@ timestepslen = 100000
 headless = True
 
 if EVAL or VIDEO:
-    timestepslen = 500
+    timestepslen = 2000
 
 if VIDEO:
     cli_args = ["--enable_cameras", "--video", "--livestream", "2"]
@@ -267,13 +267,13 @@ else:
     #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt") archive/memory
     # )
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
-    agent_path = f"{checkpoint_path}/26-03-12_01-25-17-526375_SAC/checkpoints/agent_4000.pt"
+    agent_path = f"{checkpoint_path}/26-03-12_11-06-01-281686_SAC/checkpoints/agent_10000.pt"
     agent.load(agent_path)
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/graph_encoder_4000.pt")
+        torch.load(f"{checkpoint_path}/added/graph_encoder_10000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/orient_module_4000.pt")
+        torch.load(f"{checkpoint_path}/added/orient_module_10000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()

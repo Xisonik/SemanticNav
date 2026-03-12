@@ -166,7 +166,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.imitation = False
         self.cur_angle_error = 0
         self.mean_radius = 0
-        self.warm_len = 10
+        self.warm_len = 2000
 
         self.turn_on_obstacles = False
         self.turn_on_obstacles_always = False
