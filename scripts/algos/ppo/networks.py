@@ -186,7 +186,7 @@ class Policy(GaussianMixin, Model):
             nn.Tanh()
         ).to(device)
 
-        self.log_std_parameter = nn.Parameter(torch.full(self.num_actions, device = device, fill_value = starting_std))
+        self.log_std_parameter = nn.Parameter(torch.full((self.num_actions,), device = device, fill_value = starting_std))
 
     def compute(self, inputs, role):
         B = inputs["states"].shape[0]
