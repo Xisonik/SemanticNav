@@ -29,7 +29,7 @@ set_seed(42)
 TASK_NAME = "Aloha_nav" 
 EVAL = False
 VIDEO = False
-num_envs = 4
+num_envs = 20
 timestepslen = 300000
 headless = True
 
@@ -59,7 +59,10 @@ else:
         task_name=TASK_NAME, 
         num_envs=num_envs,
         headless=headless, 
-        cli_args=cli_args
+        cli_args=cli_args,
+        CL_ON = True,
+        use_controller = False,
+        imitation = False
     )
     env = RolloutVideoWrapper(env, experiment, episode_frequency=100)
 
@@ -77,7 +80,8 @@ memory = RandomMemory(memory_size = 500, num_envs = env.num_envs)
 models = {
     "policy": Policy(
         env.observation_space, env.action_space, device,
-        shared_graph = graph_encoder, starting_std=-1.),
+        shared_graph = graph_encoder, starting_std=-1.
+        ),
     "value": Value(
         env.observation_space, env.action_space, device,
         shared_graph = graph_encoder
