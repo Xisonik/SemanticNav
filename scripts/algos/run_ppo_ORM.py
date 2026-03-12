@@ -38,9 +38,9 @@ set_seed(42)
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
 experiment = start(
-    api_key="DRYfW6B6VtUQr9llvf3jup57R",
-    project_name="general",
-    workspace="xisonik"
+    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
+    project_name="robo",
+    workspace="denmanorwat"
 )
 
 

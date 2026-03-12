@@ -45,7 +45,7 @@ def print_orientation_accuracy(peep=False):
     global eval_gt_angles, eval_pred_angles, eval_step_counter, step
     step += 1
 
-    if step > 1000 or peep:
+    if step > 3000 or peep:
         if not peep:
             step = 0
         if len(eval_gt_angles) == 0:
@@ -229,12 +229,12 @@ class GraphEncoder(nn.Module):
 # =====================================================================
 class OrientationModule(nn.Module):
     """img + graph_emb → orientation logits (36 bins)"""
-    def __init__(self, img_dim: int, goal_dim: int, graph_emb_dim: int = GRAPH_EMB_DIM, 
+    def __init__(self, img_dim: int, graph_emb_dim: int = GRAPH_EMB_DIM,
                  num_bins: int = NUM_ORIENT_BINS):
         super().__init__()
         self.num_bins = num_bins
         self.net = nn.Sequential(
-            nn.Linear(img_dim + goal_dim + graph_emb_dim, 256),
+            nn.Linear(img_dim + graph_emb_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
@@ -246,9 +246,9 @@ class OrientationModule(nn.Module):
         centers = torch.linspace(-torch.pi, torch.pi, num_bins + 1)[:-1] + bin_size / 2
         self.register_buffer("bin_centers", centers)
 
-    def forward(self, img, goal, graph_emb):
+    def forward(self, img, graph_emb):
         """Только forward без loss. Возвращает (pred_angle [B,1], probs [B,36])."""
-        logits = self.net(torch.cat([img, goal, graph_emb], dim=-1))
+        logits = self.net(torch.cat([img, graph_emb], dim=-1))
         probs = F.softmax(logits, dim=-1)
         pred_angle = self.bin_centers[probs.argmax(-1)].unsqueeze(-1)
         return pred_angle, probs, logits
@@ -352,7 +352,7 @@ class StochasticActor(GaussianMixin, Model):
         img_dim = int(observation_space["img"].shape[0])
         goal_dim = int(observation_space["goal"].shape[0])
         memory_dim = int(observation_space["memory"].shape[0])
-        mlp_in = img_dim + 1# img + graph_emb + pred_angle
+        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + 1# img + graph_emb + pred_angle
 
         self.net = nn.Sequential(
             nn.Linear(mlp_in, 512), nn.ReLU(),
@@ -372,7 +372,7 @@ class StochasticActor(GaussianMixin, Model):
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, memory, goal, graph_emb)
+            pred_angle, _, _ = self.orient_module(memory, graph_emb)
 
             if True:
                 collect_orientation_data(gt_orientation, pred_angle)
@@ -381,7 +381,7 @@ class StochasticActor(GaussianMixin, Model):
         # print("gt angle: ", gt_orientation)
         # print("angle: ", pred_angle)
         # random_orientation = (torch.rand_like(gt_orientation) * 2 * torch.pi) - torch.pi
-        x = torch.cat([img, gt_orientation], dim=-1)
+        x = torch.cat([img, goal, graph_emb, gt_orientation], dim=-1)
         return self.net(x), self.log_std_parameter, {}
 
 
@@ -398,7 +398,7 @@ class Critic(DeterministicMixin, Model):
         img_dim = int(observation_space["img"].shape[0])
         goal_dim = int(observation_space["goal"].shape[0])
         memory_dim = int(observation_space["memory"].shape[0])
-        mlp_in = img_dim + self.num_actions + 1
+        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + self.num_actions + 1
 
         self.net = nn.Sequential(
             nn.Linear(mlp_in, 512), nn.ReLU(),
@@ -417,9 +417,9 @@ class Critic(DeterministicMixin, Model):
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, memory, goal, graph_emb)
+            pred_angle, _, _ = self.orient_module(memory, graph_emb)
 
-        x = torch.cat([img, actions, gt_orientation], dim=-1)
+        x = torch.cat([img, goal, graph_emb, actions, gt_orientation], dim=-1)
         return self.net(x), {}
 
 
@@ -478,13 +478,12 @@ class AuxModuleTrainer:
             s = unflatten_tensorized_space(self.obs_space, processed)
             img = s["img"]
             memory = s["memory"]
-            goal = s["goal"]
             graph_flat = s["graph"]
             gt_yaw = s["orientation"]
 
             # Forward (с градиентами для обоих модулей)
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, probs, logits = self.orient_module(img, goal, graph_emb)
+            pred_angle, probs, logits = self.orient_module(memory, graph_emb)
 
             # Loss (градиенты текут и в orient, и в graph)
             loss, metrics = self.orient_module.compute_loss(logits, probs, gt_yaw)
