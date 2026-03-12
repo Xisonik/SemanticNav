@@ -158,12 +158,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.random_actions = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
-        self.CL_ON = False
-        self.stage = 2
+        self.CL_ON = kwargs.get('CL_ON', False)
+        self.stage = 0
         self.use_staff = True
         self.use_obstacles = True
-        self.use_controller = True
-        self.imitation = False
+        self.use_controller = kwargs.get('use_controller', True)
+        self.imitation = kwargs.get('imitation', False)
         self.cur_angle_error = 0
         self.mean_radius = 0
         self.warm_len = 2000
@@ -829,10 +829,10 @@ class WheeledRobotEnv(DirectRLEnv):
             poses = self.to_local(self._robot.data.root_pos_w)
             x, y = poses[..., 0], poses[..., 1]
 
-            xmin = self.scene_manager.room_bounds['x_min'] + 1.5
-            xmax = self.scene_manager.room_bounds['x_max'] - 1.5
-            ymin = self.scene_manager.room_bounds['y_min'] + 1.5
-            ymax = self.scene_manager.room_bounds['y_max'] - 1.5
+            xmin = self.scene_manager.room_bounds['x_min'] + 2.
+            xmax = self.scene_manager.room_bounds['x_max'] - 2.
+            ymin = self.scene_manager.room_bounds['y_min'] + 2.
+            ymax = self.scene_manager.room_bounds['y_max'] - 2.
 
             in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
             return ~in_bounds

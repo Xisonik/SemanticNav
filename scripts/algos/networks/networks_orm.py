@@ -252,12 +252,6 @@ class OrientationModule(nn.Module):
 
     def forward(self, img, memory, goal, graph_emb):
         """Только forward без loss. Возвращает (pred_angle [B,1], probs [B,36])."""
-        if torch.rand(1).item() < 0.005:  # чтобы не спамить
-            print("\n=== Orientation input stats ===")
-            print("memory mean/std:", memory.mean().item(), memory.std().item())
-            print("goal mean/std:", goal.mean().item(), goal.std().item())
-            print("graph_emb mean/std:", graph_emb.mean().item(), graph_emb.std().item())
-            print("===============================\n")
         logits = self.net(torch.cat([memory, goal, graph_emb], dim=-1))
         probs = F.softmax(logits, dim=-1)
         pred_angle = self.bin_centers[probs.argmax(-1)].unsqueeze(-1)

@@ -1,4 +1,3 @@
-ln -s /root/isaacsim /root/SemanticNav/_isaac_sim
 pip install gdown
 mkdir /root/tmp
 cd /root/tmp
@@ -17,7 +16,7 @@ rm -rf /root/tmp
 cd /root/SemanticNav
 export ISAACSIM_PATH="/root/isaacsim"
 export ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
-ln -s ${ISAACSIM_PATH} _isaac_sim
+ln -s ${ISAACSIM_PATH} ./_isaac_sim
 source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
 source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 source /root/miniconda3/etc/profile.d/conda.sh && conda run ./isaaclab.sh --conda .semantic_nav

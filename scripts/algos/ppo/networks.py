@@ -163,8 +163,8 @@ class GraphEncoder(nn.Module):
 class Policy(GaussianMixin, Model):
     """Policy (Actor): принимает dict-obs: {img, graph}. 
     В PPO графовый энкодер ОБУЧАЕТСЯ вместе с policy."""
-    def __init__(self, observation_space, action_space, device, shared_graph,
-                 clip_actions = True, clip_log_std = False):
+    def __init__(self, observation_space, action_space, device, shared_graph, 
+                 starting_std, clip_actions = True, clip_log_std = False):
         Model.__init__(self, observation_space, action_space, device)
         GaussianMixin.__init__(self, clip_actions, clip_log_std)
         self.device = device
@@ -186,7 +186,7 @@ class Policy(GaussianMixin, Model):
             nn.Tanh()
         ).to(device)
 
-        self.log_std_parameter = nn.Parameter(torch.zeros(self.num_actions, device=device))
+        self.log_std_parameter = nn.Parameter(torch.full((self.num_actions,), device = device, fill_value = starting_std))
 
     def compute(self, inputs, role):
         B = inputs["states"].shape[0]
@@ -233,9 +233,7 @@ class Value(DeterministicMixin, Model):
         emb = self.preprocessor(states["memory"].to(self.device))            # [B, img_dim]
         graph_flat = states["graph"].to(self.device)   # [B, N*24]
 
-        # Value function не обучает graph
-        with torch.no_grad():
-            graph_emb = self.shared_graph(graph_flat, img)
+        graph_emb = self.shared_graph(graph_flat, img)
 
         x = torch.cat([emb, graph_emb], dim=-1)
         v = self.net(x)

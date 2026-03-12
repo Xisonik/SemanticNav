@@ -29,6 +29,7 @@ def load_isaaclab_env(
     headless: Optional[bool] = None,
     cli_args: Sequence[str] = [],
     show_cfg: bool = True,
+    **kwargs
 ):
     """Load an Isaac Lab environment
 
@@ -180,6 +181,6 @@ def load_isaaclab_env(
             pass
 
     # load environment
-    env = gymnasium.make(args.task, cfg=cfg, render_mode="rgb_array" if args.video else None)
+    env = gymnasium.make(args.task, cfg=cfg, render_mode="rgb_array" if args.video else None, **kwargs)
 
     return env

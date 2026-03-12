@@ -26,10 +26,10 @@ set_seed(42)
     headless=True,
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
-TASK_NAME = "Aloha_turn" 
+TASK_NAME = "Aloha_nav" 
 EVAL = False
 VIDEO = False
-num_envs = 4
+num_envs = 20
 timestepslen = 300000
 headless = True
 
@@ -59,7 +59,10 @@ else:
         task_name=TASK_NAME, 
         num_envs=num_envs,
         headless=headless, 
-        cli_args=cli_args
+        cli_args=cli_args,
+        CL_ON = False,
+        use_controller = False,
+        imitation = False
     )
     env = RolloutVideoWrapper(env, experiment, episode_frequency=100)
 
@@ -77,8 +80,8 @@ memory = RandomMemory(memory_size = 500, num_envs = env.num_envs)
 models = {
     "policy": Policy(
         env.observation_space, env.action_space, device,
-        shared_graph = graph_encoder
-    ),
+        shared_graph = graph_encoder, starting_std=-1.
+        ),
     "value": Value(
         env.observation_space, env.action_space, device,
         shared_graph = graph_encoder
@@ -94,7 +97,7 @@ cfg['rollouts'] = 500
 cfg['orientation_loss_weight'] = 0.
 cfg['learning_epochs'] = 10
 cfg['learning_rate'] = 3e-4
-cfg['entropy_loss_scale'] = 0.
+cfg['entropy_loss_scale'] = 0.02
 cfg['mini_batches'] = env.num_envs * cfg['rollouts'] // mini_batch_size
 
 cfg["state_preprocessor"] = DictRunningStandardScaler
