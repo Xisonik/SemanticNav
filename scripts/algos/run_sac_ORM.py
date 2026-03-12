@@ -45,7 +45,7 @@ experiment = start(
 
 TASK_NAME = "Aloha_nav"
 EVAL = False
-VIDEO = True
+VIDEO = False
 LIVESTREAM = False
 USE_PRETRAINED = False
 
@@ -54,7 +54,7 @@ timestepslen = 100000
 headless = True
 
 if EVAL or VIDEO:
-    timestepslen = 800
+    timestepslen = 500
 
 if VIDEO:
     cli_args = ["--enable_cameras", "--video", "--livestream", "2"]
@@ -145,13 +145,13 @@ models = {
 
 cfg = SAC_DEFAULT_CONFIG.copy()
 cfg["gradient_steps"] = 1
-cfg["batch_size"] = 64
+cfg["batch_size"] = 512
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
 cfg["actor_learning_rate"] = 3e-4 # 3e-4
 cfg["critic_learning_rate"] = 3e-4 # 3e-4
 cfg["random_timesteps"] = 0
-cfg["learning_starts"] = 10 #memory_size
+cfg["learning_starts"] = memory_size
 cfg["grad_norm_clip"] = 0
 cfg["learn_entropy"] = True
 cfg["entropy_learning_rate"] = 5e-3 # 5e-3
