@@ -97,7 +97,7 @@ cfg['rollouts'] = 500
 cfg['orientation_loss_weight'] = 0.
 cfg['learning_epochs'] = 10
 cfg['learning_rate'] = 3e-4
-cfg['entropy_loss_scale'] = 0.02
+cfg['entropy_loss_scale'] = 0.01
 cfg['mini_batches'] = env.num_envs * cfg['rollouts'] // mini_batch_size
 
 cfg["state_preprocessor"] = DictRunningStandardScaler
@@ -119,6 +119,35 @@ agent = PPO(
     observation_space=env.observation_space,
     action_space=env.action_space, device=device,
     comet_experiment = experiment)
+
+
+EVAL_INTERVAL = 10000
+EVAL_DURATION = 2560
+_eval_active = False
+_eval_start_step = -1
+
+_original_post = agent.post_interaction
+
+def _post_with_aux(timestep, timesteps):
+    global _eval_active, _eval_start_step
+    _original_post(timestep, timesteps)
+
+    if (not _eval_active 
+            and timestep > cfg["learning_starts"]
+            and timestep % EVAL_INTERVAL == 0):
+        _eval_active = True
+        _eval_start_step = timestep
+        env.unwrapped.eval_mode(ON=True, eval_stage=0)
+        print(f"[EVAL] Started at timestep {timestep}")
+
+    if _eval_active and (timestep - _eval_start_step) >= EVAL_DURATION:
+        _eval_active = False
+        eval_sr = env.unwrapped.eval_mode(ON=False)
+        experiment.log_metric("eval/success_rate", eval_sr, step=timestep)
+        acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
+        if acc_10 != -1:
+            experiment.log_metric("eval/orientation_acc_10", acc_10, step=timestep)
+        print(f"[EVAL] Finished. SR={eval_sr:.1f}%")
 
 trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
 trainer.train()
