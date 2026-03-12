@@ -11,6 +11,7 @@ SAC + отдельно обучаемые GraphEncoder и OrientationModule
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from collections import deque
 from skrl.utils.spaces.torch import unflatten_tensorized_space, flatten_tensorized_space
 from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 from skrl.resources.preprocessors.torch import RunningStandardScaler
@@ -25,35 +26,39 @@ TEXT_EMB_DIM = 16
 GRAPH_EMB_DIM = 128
 NUM_ORIENT_BINS = 36
 GOAL_NODE_INDEX = 0
+ORIENTATION_BUFFER_SIZE = 500  # Размер роллаута
 
 # for accuracy
-# Внешние массивы для сбора данных при EVAL
-eval_gt_angles = []
-eval_pred_angles = []
+# Роллаут данных об ориентации (последние 500 примеров)
+eval_gt_angles = deque(maxlen=ORIENTATION_BUFFER_SIZE)
+eval_pred_angles = deque(maxlen=ORIENTATION_BUFFER_SIZE)
 eval_step_counter = 0
 step = 0
 
 def collect_orientation_data(gt, pred):
-    """Внешняя функция для сбора данных об ориентации"""
+    """Внешняя функция для сбора данных об ориентации (роллаут размером 500)"""
     global eval_gt_angles, eval_pred_angles, eval_step_counter
+    # deque автоматически удаляет старые элементы при превышении maxlen
     eval_gt_angles.append(gt.detach().cpu())
     eval_pred_angles.append(pred.detach().cpu())
     eval_step_counter += 1
 
 def print_orientation_accuracy(peep=False):
-    """Внешняя функция для подсчета и вывода accuracy"""
+    """Внешняя функция для подсчета и вывода accuracy по последним 500 примерам"""
     global eval_gt_angles, eval_pred_angles, eval_step_counter, step
     step += 1
 
-    if step > 3000 or peep:
+    if step > 1000 or peep:
         if not peep:
             step = 0
+        
         if len(eval_gt_angles) == 0:
             print("No orientation data collected")
-            return
+            return -1, -1, -1
         
-        gt = torch.cat(eval_gt_angles, dim=0)
-        pred = torch.cat(eval_pred_angles, dim=0)
+        # Конвертируем deque в тензор
+        gt = torch.cat(list(eval_gt_angles), dim=0)
+        pred = torch.cat(list(eval_pred_angles), dim=0)
         
         # Обработка углов в радианах
         error = torch.abs(gt - pred)
@@ -62,31 +67,30 @@ def print_orientation_accuracy(peep=False):
         # Accuracy при допустимой ошибке < 5 градусов (0.087 rad)
         if peep:
             print(f"\n{'='*50}")
-            print(f"EVAL COMPLETED")
+            print(f"EVAL COMPLETED (last {len(eval_gt_angles)} steps)")
             print(f"Total steps evaluated: {len(eval_gt_angles)}")
             print(f"Mean error: {error.mean().item()*180/torch.pi:.2f} degrees")
             print(f"Std error: {error.std().item()*180/torch.pi:.2f} degrees")
             print(f"Min error: {error.min().item()*180/torch.pi:.2f} degrees")
             print(f"Max error: {error.max().item()*180/torch.pi:.2f} degrees")
+        
         threshold = 10.0 * torch.pi / 180.0
         accuracy_10 = (error < threshold).float().mean().item()
         if peep:
             print(f"Orientation accuracy (<10°): {accuracy_10*100:.2f}%")
+        
         threshold = 20.0 * torch.pi / 180.0
         accuracy_20 = (error < threshold).float().mean().item()
         if peep:
             print(f"Orientation accuracy (<20°): {accuracy_20*100:.2f}%")
+        
         threshold = 30.0 * torch.pi / 180.0
         accuracy_30 = (error < threshold).float().mean().item()
         if peep:
             print(f"Orientation accuracy (<30°): {accuracy_30*100:.2f}%")
             print(f"{'='*50}\n")
         
-        # Очищаем данные после вывода
-        if not peep:
-            eval_gt_angles.clear()
-            eval_pred_angles.clear()
-            eval_step_counter = 0
+        # НЕ очищаем данные! Роллаут сам управляет размером буфера
         return accuracy_10, accuracy_20, accuracy_30
 
 # =====================================================================
@@ -229,12 +233,12 @@ class GraphEncoder(nn.Module):
 # =====================================================================
 class OrientationModule(nn.Module):
     """img + graph_emb → orientation logits (36 bins)"""
-    def __init__(self, img_dim: int, graph_emb_dim: int = GRAPH_EMB_DIM,
+    def __init__(self, img_dim: int, memory_dim: int, goal_dim: int, graph_emb_dim: int = GRAPH_EMB_DIM, 
                  num_bins: int = NUM_ORIENT_BINS):
         super().__init__()
         self.num_bins = num_bins
         self.net = nn.Sequential(
-            nn.Linear(img_dim + graph_emb_dim, 256),
+            nn.Linear(memory_dim + goal_dim + graph_emb_dim, 256),
             nn.ReLU(),
             nn.Linear(256, 128),
             nn.ReLU(),
@@ -246,9 +250,9 @@ class OrientationModule(nn.Module):
         centers = torch.linspace(-torch.pi, torch.pi, num_bins + 1)[:-1] + bin_size / 2
         self.register_buffer("bin_centers", centers)
 
-    def forward(self, img, graph_emb):
+    def forward(self, img, memory, goal, graph_emb):
         """Только forward без loss. Возвращает (pred_angle [B,1], probs [B,36])."""
-        logits = self.net(torch.cat([img, graph_emb], dim=-1))
+        logits = self.net(torch.cat([memory, goal, graph_emb], dim=-1))
         probs = F.softmax(logits, dim=-1)
         pred_angle = self.bin_centers[probs.argmax(-1)].unsqueeze(-1)
         return pred_angle, probs, logits
@@ -372,7 +376,7 @@ class StochasticActor(GaussianMixin, Model):
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
+            pred_angle, _, _ = self.orient_module(img, memory, goal, graph_emb)
 
             if True:
                 collect_orientation_data(gt_orientation, pred_angle)
@@ -417,7 +421,7 @@ class Critic(DeterministicMixin, Model):
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, _, _ = self.orient_module(img, graph_emb)
+            pred_angle, _, _ = self.orient_module(img, memory, goal, graph_emb)
 
         x = torch.cat([img, actions, gt_orientation], dim=-1)
         return self.net(x), {}
@@ -478,12 +482,13 @@ class AuxModuleTrainer:
             s = unflatten_tensorized_space(self.obs_space, processed)
             img = s["img"]
             memory = s["memory"]
+            goal = s["goal"]
             graph_flat = s["graph"]
             gt_yaw = s["orientation"]
 
             # Forward (с градиентами для обоих модулей)
             graph_emb = self.graph_encoder(graph_flat)
-            pred_angle, probs, logits = self.orient_module(img, graph_emb)
+            pred_angle, probs, logits = self.orient_module(img, memory, goal, graph_emb)
 
             # Loss (градиенты текут и в orient, и в graph)
             loss, metrics = self.orient_module.compute_loss(logits, probs, gt_yaw)

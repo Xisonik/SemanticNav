@@ -159,10 +159,10 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
         self.CL_ON = False
-        self.stage = 4
+        self.stage = 0
         self.use_staff = True
-        self.use_obstacles = False
-        self.use_controller = False
+        self.use_obstacles = True
+        self.use_controller = True
         self.imitation = False
         self.cur_angle_error = 0
         self.mean_radius = 0
@@ -255,7 +255,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.control_percentage = 0
         self.assistance_ratio = 0
         self.assistance_num_envs = 0
-        self.TURN_TASK = True
+        self.TURN_TASK = False
         self.DEF_TURN = False
         self._update_controlled_envs()
 
@@ -822,7 +822,7 @@ class WheeledRobotEnv(DirectRLEnv):
             angle = torch.acos(cos_angle)
             angle_degrees = torch.abs(angle) * 180.0 / 3.141592653589793
             # Проверяем, что угол меньше порога
-            out = angle_degrees > 170
+            out = angle_degrees > 500
             # if torch.any(out):
             #     print("out: ", out)
 
