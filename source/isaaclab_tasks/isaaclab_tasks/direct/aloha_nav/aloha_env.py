@@ -167,6 +167,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.cur_angle_error = 0
         self.mean_radius = 0
         self.warm_len = 2000
+        self.my_episode_lenght = 256
 
         self.turn_on_obstacles = False
         self.turn_on_obstacles_always = False
@@ -190,7 +191,6 @@ class WheeledRobotEnv(DirectRLEnv):
         self.set_debug_vis(self.cfg.debug_vis)
 
         self.turn_on_controller_step = 0
-        self.my_episode_lenght = 256      
         
         if self.turn_on_obstacles_always:
             self.use_obstacles = True

@@ -188,7 +188,7 @@ aux_trainer = AuxModuleTrainer(
     device=device,
     lr_graph=3e-3,
     lr_orient=1e-3,
-    batch_size=256,
+    batch_size=512,
     train_steps_per_call=1,
     log_interval=1000,
 )
@@ -197,8 +197,8 @@ _original_post = agent.post_interaction
 mode_1 = False
 _eval_active = False
 _eval_start_step = -1
-EVAL_INTERVAL = 200
-EVAL_DURATION = 100
+EVAL_INTERVAL = 1000
+EVAL_DURATION = 256
 
 def _post_with_aux(timestep, timesteps):
     global _eval_active, _eval_start_step
@@ -293,8 +293,6 @@ else:
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
     agent_path = f"{checkpoint_path}/26-03-12_15-48-52-314824_SAC/checkpoints/agent_6000.pt"
     agent.load(agent_path)
-    print(agent._state_preprocessor)
-    print(agent._state_preprocessor.img_scaler.running_mean[:5])
     graph_encoder.load_state_dict(
         torch.load(f"{checkpoint_path}/added/graph_encoder_6000.pt")
     )
