@@ -159,7 +159,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
         self.CL_ON = False
-        self.stage = 0
+        self.stage = 2
         self.use_staff = True
         self.use_obstacles = True
         self.use_controller = True
@@ -190,7 +190,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.set_debug_vis(self.cfg.debug_vis)
 
         self.turn_on_controller_step = 0
-        self.my_episode_lenght = 256        
+        self.my_episode_lenght = 256      
         
         if self.turn_on_obstacles_always:
             self.use_obstacles = True
@@ -258,6 +258,49 @@ class WheeledRobotEnv(DirectRLEnv):
         self.TURN_TASK = False
         self.DEF_TURN = False
         self._update_controlled_envs()
+
+    def eval_mode(self, ON, eval_stage: int = 0):
+        if ON:
+            """Сохраняет train-состояние и переключает env в eval."""
+            self._saved_train_state = {
+                'stage': self.stage,
+                'mean_radius': self.mean_radius,
+                'cur_angle_error': self.cur_angle_error,
+                'success_stacks': [s.copy() for s in self.success_stacks],
+                'sr_stack_full': self.sr_stack_full,
+                'success_rate': self.success_rate,
+                'CL_ON': self.CL_ON,
+                'use_controller': self.use_controller,
+            }
+            self.stage = eval_stage
+            self.mean_radius = 0.0
+            self.cur_angle_error = 0.0
+            self.CL_ON = False
+            self.EVAL = True
+            # Очищаем SR стеки — eval считается с нуля
+            self.success_stacks = [[] for _ in range(self.num_envs)]
+            self.sr_stack_full = False
+            self.success_rate = 0.0
+            # Форсируем reset всех envs на следующем шаге
+            self.episode_length_buf[:] = self.my_episode_lenght
+            print(f"[EVAL] Entered eval mode (stage={eval_stage})")
+        else:
+            """Восстанавливает train-состояние и логирует eval SR."""
+            eval_sr = self.success_rate
+            s = self._saved_train_state
+            self.stage = s['stage']
+            self.mean_radius = s['mean_radius']
+            self.cur_angle_error = s['cur_angle_error']
+            self.success_stacks = s['success_stacks']
+            self.sr_stack_full = s['sr_stack_full']
+            self.success_rate = s['success_rate']
+            self.CL_ON = s['CL_ON']
+            self.use_controller = s['use_controller']
+            self.EVAL = False
+            # Форсируем reset всех envsм
+            self.episode_length_buf[:] = self.my_episode_lenght
+            print(f"[EVAL] Exited eval mode. Eval SR={eval_sr:.1f}%, restored train SR={self.success_rate:.1f}%")
+            return eval_sr
 
     def _update_controlled_envs(self, env_ids = None):
         """
@@ -625,7 +668,7 @@ class WheeledRobotEnv(DirectRLEnv):
         goal_bonus = 5.0 * goal_reached.float()
         reward = -0.05 + turnes + collision_penalty + goal_bonus
 
-        died, _ = self._get_dones(self.my_episode_lenght - 1, inner=True)
+        died, _ = self._get_dones(inner=True)
         if torch.any(died):
             sr = self.update_success_rate(goal_reached)
 
@@ -727,7 +770,7 @@ class WheeledRobotEnv(DirectRLEnv):
             return torch.tensor(self.success_rate, device=self.device)
         
         # Получаем завершенные эпизоды
-        died, time_out = self._get_dones(self.my_episode_lenght - 1, inner=True)
+        died, time_out = self._get_dones(inner=True)
         completed = died | time_out
         
         if torch.any(completed):
@@ -832,11 +875,11 @@ class WheeledRobotEnv(DirectRLEnv):
         self.success_stacks = [[] for _ in range(self.num_envs)]  # Список списков для каждой среды
         self.sr_stack_full = False
 
-    def _get_dones(self, my_episode_lenght = 256, inner=False) -> tuple[torch.Tensor, torch.Tensor]:
+    def _get_dones(self, inner=False) -> tuple[torch.Tensor, torch.Tensor]:
         """
         inner flag - not changes in buffers
         """
-        time_out = self.is_time_out(my_episode_lenght)
+        time_out = self.is_time_out(self.my_episode_lenght - 1)
         
         died = self.goal_reached(get_num_subs=False) | self.get_contact() | self.out_of_bounds()
 

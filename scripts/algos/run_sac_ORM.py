@@ -44,17 +44,17 @@ experiment = start(
 
 
 TASK_NAME = "Aloha_nav"
-EVAL = True
-VIDEO = False
+EVAL = False
+VIDEO = True
 LIVESTREAM = False
-USE_PRETRAINED = True
+USE_PRETRAINED = False
 
 num_envs = 128
 timestepslen = 100000
 headless = True
 
 if EVAL or VIDEO:
-    timestepslen = 2000
+    timestepslen = 800
 
 if VIDEO:
     cli_args = ["--enable_cameras", "--video", "--livestream", "2"]
@@ -145,13 +145,13 @@ models = {
 
 cfg = SAC_DEFAULT_CONFIG.copy()
 cfg["gradient_steps"] = 1
-cfg["batch_size"] = 512
+cfg["batch_size"] = 64
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
 cfg["actor_learning_rate"] = 3e-4 # 3e-4
 cfg["critic_learning_rate"] = 3e-4 # 3e-4
 cfg["random_timesteps"] = 0
-cfg["learning_starts"] = 100
+cfg["learning_starts"] = 10 #memory_size
 cfg["grad_norm_clip"] = 0
 cfg["learn_entropy"] = True
 cfg["entropy_learning_rate"] = 5e-3 # 5e-3
@@ -187,43 +187,67 @@ aux_trainer = AuxModuleTrainer(
     obs_space=env.observation_space,
     device=device,
     lr_graph=3e-3,
-    lr_orient=3e-3,
-    batch_size=1024,
+    lr_orient=1e-3,
+    batch_size=256,
     train_steps_per_call=1,
     log_interval=1000,
 )
 
 _original_post = agent.post_interaction
 mode_1 = False
+_eval_active = False
+_eval_start_step = -1
+EVAL_INTERVAL = 200
+EVAL_DURATION = 100
+
 def _post_with_aux(timestep, timesteps):
+    global _eval_active, _eval_start_step
     _original_post(timestep, timesteps)
-    if not mode_1:
+
+    if (not _eval_active 
+            and timestep > cfg["learning_starts"]
+            and timestep % EVAL_INTERVAL == 0):
+        _eval_active = True
+        _eval_start_step = timestep
+        env.unwrapped.eval_mode(ON=True, eval_stage=0)
+        print(f"[EVAL] Started at timestep {timestep}")
+
+    if _eval_active and (timestep - _eval_start_step) >= EVAL_DURATION:
+        _eval_active = False
+        eval_sr = env.unwrapped.eval_mode(ON=False)
+        experiment.log_metric("eval/success_rate", eval_sr, step=timestep)
+        acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
+        if acc_10 != -1:
+            experiment.log_metric("eval/orientation_acc_10", acc_10, step=timestep)
+        print(f"[EVAL] Finished. SR={eval_sr:.1f}%")
+
+    if not _eval_active:
         if timestep > cfg["learning_starts"]:
             aux_trainer.step(timestep)
 
-    if timestep % 2000 == 0:
-        save_dir = cfg["experiment"]["directory"]
-        torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
-        torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
-    # if timestep % 2000 == 0:
-    #     memory.save(directory="logs/skrl/memory")
-    if timestep % 50 == 0:
-        metrics = env.unwrapped.get_metrics()
-        # print(metrics)
         if timestep % 1000 == 0:
-            print(metrics)
-        acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
-        if acc_10 != -1:
-            experiment.log_metric("success_rate", metrics["success_rate"], step=timestep)
-            experiment.log_metric("mean_radius", metrics["mean_radius"], step=timestep)
-            experiment.log_metric("angle_error", metrics["cur_angle_error"], step=timestep)
-            experiment.log_metric("stage", metrics["stage"], step=timestep)
-            experiment.log_metric("avg_episode_length", metrics["avg_episode_length"], step=timestep)
-            experiment.log_metric("assistance_ratio", metrics["assistance_ratio"], step=timestep)
-            experiment.log_metric("assistance_num_envs", metrics["assistance_num_envs"], step=timestep)
-            experiment.log_metric("accuracy orientation module 10 grad", acc_10, step=timestep)
-            experiment.log_metric("accuracy orientation module 20 grad", acc_20, step=timestep)
-            experiment.log_metric("accuracy orientation module 30 grad", acc_30, step=timestep)
+            save_dir = cfg["experiment"]["directory"]
+            torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
+            torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
+        # if timestep % 2000 == 0:
+        #     memory.save(directory="logs/skrl/memory")
+        if timestep % 50 == 0:
+            metrics = env.unwrapped.get_metrics()
+            # print(metrics)
+            if timestep % 1000 == 0:
+                print(metrics)
+            acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
+            if acc_10 != -1:
+                experiment.log_metric("success_rate", metrics["success_rate"], step=timestep)
+                experiment.log_metric("mean_radius", metrics["mean_radius"], step=timestep)
+                experiment.log_metric("angle_error", metrics["cur_angle_error"], step=timestep)
+                experiment.log_metric("stage", metrics["stage"], step=timestep)
+                experiment.log_metric("avg_episode_length", metrics["avg_episode_length"], step=timestep)
+                experiment.log_metric("assistance_ratio", metrics["assistance_ratio"], step=timestep)
+                experiment.log_metric("assistance_num_envs", metrics["assistance_num_envs"], step=timestep)
+                experiment.log_metric("accuracy orientation module 10 grad", acc_10, step=timestep)
+                experiment.log_metric("accuracy orientation module 20 grad", acc_20, step=timestep)
+                experiment.log_metric("accuracy orientation module 30 grad", acc_30, step=timestep)
 
 agent.post_interaction = _post_with_aux
 
@@ -267,13 +291,15 @@ else:
     #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt") archive/memory
     # )
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
-    agent_path = f"{checkpoint_path}/26-03-12_11-06-01-281686_SAC/checkpoints/agent_10000.pt"
+    agent_path = f"{checkpoint_path}/26-03-12_15-48-52-314824_SAC/checkpoints/agent_6000.pt"
     agent.load(agent_path)
+    print(agent._state_preprocessor)
+    print(agent._state_preprocessor.img_scaler.running_mean[:5])
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/graph_encoder_10000.pt")
+        torch.load(f"{checkpoint_path}/added/graph_encoder_6000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/orient_module_10000.pt")
+        torch.load(f"{checkpoint_path}/added/orient_module_6000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()
