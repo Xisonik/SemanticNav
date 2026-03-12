@@ -162,7 +162,7 @@ class WheeledRobotEnv(DirectRLEnv):
         self.stage = 0
         self.use_staff = True
         self.use_obstacles = True
-        self.use_controller = False
+        self.use_controller = True
         self.imitation = False
         self.cur_angle_error = 0
         self.mean_radius = 0
