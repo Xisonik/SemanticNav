@@ -158,12 +158,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.random_actions = False
         self.scene_manager = SceneManager(self.num_envs, self.config_path, self.device)
 
-        self.CL_ON = False
+        self.CL_ON = kwargs.get('CL_ON', False)
         self.stage = 0
         self.use_staff = True
         self.use_obstacles = True
-        self.use_controller = True
-        self.imitation = False
+        self.use_controller = kwargs.get('use_controller', True)
+        self.imitation = kwargs.get('imitation', False)
         self.cur_angle_error = 0
         self.mean_radius = 0
         self.warm_len = 2000

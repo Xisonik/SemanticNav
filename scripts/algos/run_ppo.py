@@ -77,8 +77,7 @@ memory = RandomMemory(memory_size = 500, num_envs = env.num_envs)
 models = {
     "policy": Policy(
         env.observation_space, env.action_space, device,
-        shared_graph = graph_encoder
-    ),
+        shared_graph = graph_encoder, starting_std=-1.),
     "value": Value(
         env.observation_space, env.action_space, device,
         shared_graph = graph_encoder
