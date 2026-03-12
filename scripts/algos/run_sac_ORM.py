@@ -18,9 +18,9 @@ set_seed(42)
 from comet_ml import start
 from comet_ml.integration.pytorch import log_model
 experiment = start(
-    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
-    project_name="robo",
-    workspace="denmanorwat"
+    api_key="DRYfW6B6VtUQr9llvf3jup57R",
+    project_name="general",
+    workspace="xisonik"
 )
 
 """
@@ -47,14 +47,14 @@ TASK_NAME = "Aloha_nav"
 EVAL = False
 VIDEO = False
 LIVESTREAM = False
-USE_PRETRAINED = False
+USE_PRETRAINED = True
 
-num_envs = 64
+num_envs = 128
 timestepslen = 100000
 headless = True
 
 if EVAL or VIDEO:
-    timestepslen = 1000
+    timestepslen = 500
 
 if VIDEO:
     cli_args = ["--enable_cameras", "--video", "--livestream", "2"]
@@ -102,6 +102,8 @@ graph_encoder = GraphEncoder(
 
 orient_module = OrientationModule(
     img_dim=env.observation_space["img"].shape[0],
+    memory_dim=env.observation_space["memory"].shape[0],
+    goal_dim=env.observation_space["goal"].shape[0],
 ).to(device)
 
 graph_encoder.eval()
@@ -201,26 +203,27 @@ def _post_with_aux(timestep, timesteps):
 
     if timestep % 2000 == 0:
         save_dir = cfg["experiment"]["directory"]
-        #torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
-        #torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
+        torch.save(graph_encoder.state_dict(), f"{save_dir}/added/graph_encoder_{timestep}.pt")
+        torch.save(orient_module.state_dict(), f"{save_dir}/added/orient_module_{timestep}.pt")
     # if timestep % 2000 == 0:
     #     memory.save(directory="logs/skrl/memory")
     if timestep % 50 == 0:
         metrics = env.unwrapped.get_metrics()
         # print(metrics)
-        if timestep % 2000 == 0:
+        if timestep % 1000 == 0:
             print(metrics)
         acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
-        experiment.log_metric("success_rate", metrics["success_rate"], step=timestep)
-        experiment.log_metric("mean_radius", metrics["mean_radius"], step=timestep)
-        experiment.log_metric("angle_error", metrics["cur_angle_error"], step=timestep)
-        experiment.log_metric("stage", metrics["stage"], step=timestep)
-        experiment.log_metric("avg_episode_length", metrics["avg_episode_length"], step=timestep)
-        experiment.log_metric("assistance_ratio", metrics["assistance_ratio"], step=timestep)
-        experiment.log_metric("assistance_num_envs", metrics["assistance_num_envs"], step=timestep)
-        experiment.log_metric("accuracy orientation module 10 grad", acc_10, step=timestep)
-        experiment.log_metric("accuracy orientation module 20 grad", acc_20, step=timestep)
-        experiment.log_metric("accuracy orientation module 30 grad", acc_30, step=timestep)
+        if acc_10 != -1:
+            experiment.log_metric("success_rate", metrics["success_rate"], step=timestep)
+            experiment.log_metric("mean_radius", metrics["mean_radius"], step=timestep)
+            experiment.log_metric("angle_error", metrics["cur_angle_error"], step=timestep)
+            experiment.log_metric("stage", metrics["stage"], step=timestep)
+            experiment.log_metric("avg_episode_length", metrics["avg_episode_length"], step=timestep)
+            experiment.log_metric("assistance_ratio", metrics["assistance_ratio"], step=timestep)
+            experiment.log_metric("assistance_num_envs", metrics["assistance_num_envs"], step=timestep)
+            experiment.log_metric("accuracy orientation module 10 grad", acc_10, step=timestep)
+            experiment.log_metric("accuracy orientation module 20 grad", acc_20, step=timestep)
+            experiment.log_metric("accuracy orientation module 30 grad", acc_30, step=timestep)
 
 agent.post_interaction = _post_with_aux
 
@@ -240,10 +243,10 @@ if not EVAL:
         # agent_path = f"{checkpoint_path}/26-02-26_16-35-01-718674_SAC/checkpoints/agent_42000.pt"
         # agent.load(agent_path)
         graph_encoder.load_state_dict(
-            torch.load(f"logs/skrl/aloha_sac/added/graph_encoder_42000.pt")
+            torch.load(f"logs/skrl/aloha_sac/added/archive/pre_mem_turn_to_nav/graph_encoder_4000.pt")
         )
         orient_module.load_state_dict(
-            torch.load(f"logs/skrl/aloha_sac/added/orient_module_42000.pt")
+            torch.load(f"logs/skrl/aloha_sac/added/archive/pre_mem_turn_to_nav/orient_module_4000.pt")
         )
         if mode_1:
             graph_encoder.eval()
@@ -264,13 +267,13 @@ else:
     #     torch.load("logs/skrl/aloha_sac/memory/preprocessor.pt") archive/memory
     # )
     checkpoint_path = "/home/xiso/IsaacLab/logs/skrl/aloha_sac"
-    agent_path = f"{checkpoint_path}/26-03-10_23-34-50-145979_SAC/checkpoints/agent_50000.pt"
+    agent_path = f"{checkpoint_path}/26-03-12_01-25-17-526375_SAC/checkpoints/agent_4000.pt"
     agent.load(agent_path)
     graph_encoder.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/graph_encoder_30000.pt")
+        torch.load(f"{checkpoint_path}/added/graph_encoder_4000.pt")
     )
     orient_module.load_state_dict(
-        torch.load(f"{checkpoint_path}/added/orient_module_30000.pt")
+        torch.load(f"{checkpoint_path}/added/orient_module_4000.pt")
     )
     trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
     trainer.eval()

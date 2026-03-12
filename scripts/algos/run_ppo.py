@@ -26,10 +26,10 @@ set_seed(42)
     headless=True,
     cli_args=["--enable_cameras", "--video", "--livestream", "2",],
 """
-TASK_NAME = "Aloha_nav" 
+TASK_NAME = "Aloha_turn" 
 EVAL = False
 VIDEO = False
-num_envs = 20
+num_envs = 4
 timestepslen = 300000
 headless = True
 
@@ -94,7 +94,7 @@ cfg['rollouts'] = 500
 cfg['orientation_loss_weight'] = 0.
 cfg['learning_epochs'] = 10
 cfg['learning_rate'] = 3e-4
-cfg['entropy_loss_scale'] = 0.01
+cfg['entropy_loss_scale'] = 0.
 cfg['mini_batches'] = env.num_envs * cfg['rollouts'] // mini_batch_size
 
 cfg["state_preprocessor"] = DictRunningStandardScaler

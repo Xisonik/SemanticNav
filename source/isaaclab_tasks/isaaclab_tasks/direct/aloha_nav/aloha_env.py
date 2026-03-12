@@ -161,12 +161,12 @@ class WheeledRobotEnv(DirectRLEnv):
         self.CL_ON = False
         self.stage = 0
         self.use_staff = True
-        self.use_obstacles = False
-        self.use_controller = False
+        self.use_obstacles = True
+        self.use_controller = True
         self.imitation = False
         self.cur_angle_error = 0
         self.mean_radius = 0
-        self.warm_len = 2000
+        self.warm_len = 10
 
         self.turn_on_obstacles = False
         self.turn_on_obstacles_always = False
@@ -408,6 +408,7 @@ class WheeledRobotEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
     def _get_observations(self) -> dict:
+        
         self.tensorboard_step += 1
         self.cur_step += 1
         self.episode_lengths += 1
@@ -785,10 +786,10 @@ class WheeledRobotEnv(DirectRLEnv):
             poses = self.to_local(self._robot.data.root_pos_w)
             x, y = poses[..., 0], poses[..., 1]
 
-            xmin = self.scene_manager.room_bounds['x_min'] + 2
-            xmax = self.scene_manager.room_bounds['x_max'] - 2
-            ymin = self.scene_manager.room_bounds['y_min'] + 2
-            ymax = self.scene_manager.room_bounds['y_max'] - 2
+            xmin = self.scene_manager.room_bounds['x_min'] + 1.5
+            xmax = self.scene_manager.room_bounds['x_max'] - 1.5
+            ymin = self.scene_manager.room_bounds['y_min'] + 1.5
+            ymax = self.scene_manager.room_bounds['y_max'] - 1.5
 
             in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
             return ~in_bounds
@@ -821,7 +822,7 @@ class WheeledRobotEnv(DirectRLEnv):
             angle = torch.acos(cos_angle)
             angle_degrees = torch.abs(angle) * 180.0 / 3.141592653589793
             # Проверяем, что угол меньше порога
-            out = angle_degrees > 170
+            out = angle_degrees > 500
             # if torch.any(out):
             #     print("out: ", out)
 
