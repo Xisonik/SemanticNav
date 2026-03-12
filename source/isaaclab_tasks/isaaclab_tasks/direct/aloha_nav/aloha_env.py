@@ -786,10 +786,10 @@ class WheeledRobotEnv(DirectRLEnv):
             poses = self.to_local(self._robot.data.root_pos_w)
             x, y = poses[..., 0], poses[..., 1]
 
-            xmin = self.scene_manager.room_bounds['x_min'] + 1.5
-            xmax = self.scene_manager.room_bounds['x_max'] - 1.5
-            ymin = self.scene_manager.room_bounds['y_min'] + 1.5
-            ymax = self.scene_manager.room_bounds['y_max'] - 1.5
+            xmin = self.scene_manager.room_bounds['x_min'] + 2.
+            xmax = self.scene_manager.room_bounds['x_max'] - 2.
+            ymin = self.scene_manager.room_bounds['y_min'] + 2.
+            ymax = self.scene_manager.room_bounds['y_max'] - 2.
 
             in_bounds = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
             return ~in_bounds
