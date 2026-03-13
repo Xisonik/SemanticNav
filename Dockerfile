@@ -38,13 +38,13 @@ RUN mv text_embeddings.pt /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks
 RUN cd /root
 RUN rm -rf /root/tmp
 
+ENV ISAACSIM_PATH="/isaac-sim"
+ENV ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
+
 # Required for Isaac Sim to accept EULA and privacy consent (enables omni.client HTTP access)
 ENV ACCEPT_EULA=Y
 ENV PRIVACY_CONSENT=Y
 ENV OMNI_KIT_ALLOW_ROOT=1
-
-ENV ISAACSIM_PATH="/isaac-sim"
-ENV ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
 
 # Create directories required by Omniverse Kit / omni.client
 RUN mkdir -p /isaac-sim/kit/cache && \
