@@ -18,13 +18,10 @@ RUN wget https://download.isaacsim.omniverse.nvidia.com/isaac-sim-standalone-4.5
 RUN unzip isaac-sim-standalone-4.5.0-linux-x86_64.zip
 RUN rm -f isaac-sim-standalone-4.5.0-linux-x86_64.zip
 
-RUN apt-get update && apt-get install -y openssh-client git
-RUN mkdir -p -m 0600 ~/.ssh
-RUN ssh-keyscan -H github.com >> ~/.ssh/known_hosts
 RUN mkdir /root/SemanticNav
 WORKDIR /root/SemanticNav
 RUN git init
-RUN git pull git@github.com:Xisonik/SemanticNav.git main:master
+RUN git -c core.sshCommand='ssh -o StrictHostKeyChecking=accept-new' pull pull git@github.com:Xisonik/SemanticNav.git main:master
 
 RUN pip install gdown
 RUN mkdir /root/tmp
