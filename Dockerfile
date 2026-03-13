@@ -12,11 +12,11 @@ RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -
 RUN bash /root/miniconda3/miniconda.sh -b -u -p /root/miniconda3
 RUN rm -f /root/miniconda3/miniconda.sh
 
-RUN mkdir /root/isaacsim
-WORKDIR /root/isaacsim
-RUN wget https://download.isaacsim.omniverse.nvidia.com/isaac-sim-standalone-4.5.0-linux-x86_64.zip
-RUN unzip isaac-sim-standalone-4.5.0-linux-x86_64.zip
-RUN rm -f isaac-sim-standalone-4.5.0-linux-x86_64.zip
+#RUN mkdir /root/isaacsim
+#WORKDIR /root/isaacsim
+#RUN wget https://download.isaacsim.omniverse.nvidia.com/isaac-sim-standalone-4.5.0-linux-x86_64.zip
+#RUN unzip isaac-sim-standalone-4.5.0-linux-x86_64.zip
+#RUN rm -f isaac-sim-standalone-4.5.0-linux-x86_64.zip
 
 RUN mkdir /root/SemanticNav
 WORKDIR /root/SemanticNav
@@ -38,7 +38,7 @@ RUN mv text_embeddings.pt /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks
 RUN cd /root
 RUN rm -rf /root/tmp
 
-ENV ISAACSIM_PATH="/root/isaacsim"
+ENV ISAACSIM_PATH="/isaac-sim"
 ENV ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
 WORKDIR /root/SemanticNav
 RUN ln -s ${ISAACSIM_PATH} _isaac_sim
