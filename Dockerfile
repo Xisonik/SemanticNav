@@ -18,6 +18,7 @@ RUN wget https://download.isaacsim.omniverse.nvidia.com/isaac-sim-standalone-4.5
 RUN unzip isaac-sim-standalone-4.5.0-linux-x86_64.zip
 RUN rm -f isaac-sim-standalone-4.5.0-linux-x86_64.zip
 
+RUN mkdir -p ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts
 RUN mkdir /root/SemanticNav
 WORKDIR /root/SemanticNav
 RUN git init
