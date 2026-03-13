@@ -7,6 +7,18 @@ RUN apt install -y build-essential cmake git libssl-dev libfreetype6-dev zlib1g-
 	libbz2-dev libreadline-dev libsqlite3-dev libglib2.0-0 libfontconfig1-dev curl git \
 	libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev ncurses-term \
 	libffi-dev liblzma-dev libosmesa6-dev patchelf wget unzip
+RUN echo "[settings]
+persistent.isaac.asset_root.default = \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5\"
+exts.\"isaacsim.asset.browser\".folders = [
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Robots\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/People\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/IsaacLab\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Props\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Environments\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Materials\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Samples\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Sensors\",
+]" >> /isaac-sim/apps/isaacsim.exp.base.kit
 RUN mkdir -p /root/miniconda3
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /root/miniconda3/miniconda.sh
 RUN bash /root/miniconda3/miniconda.sh -b -u -p /root/miniconda3
