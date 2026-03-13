@@ -22,7 +22,7 @@ RUN mkdir /root/SemanticNav
 WORKDIR /root/SemanticNav
 RUN git init
 RUN git pull https://github.com/Xisonik/SemanticNav.git main:master
-RUN cat /root/SemanticNav/appendage >> /isaac-sim/apps/isaacsim.exp.base.kit
+RUN ls && pwd && cat /root/SemanticNav/appendage >> /isaac-sim/apps/isaacsim.exp.base.kit
 
 RUN pip install gdown
 RUN mkdir /root/tmp
