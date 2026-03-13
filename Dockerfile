@@ -15,7 +15,7 @@ RUN rm -f /root/miniconda3/miniconda.sh
 RUN mkdir /root/isaacsim
 WORKDIR /root/isaacsim
 RUN wget https://download.isaacsim.omniverse.nvidia.com/isaac-sim-standalone-4.5.0-linux-x86_64.zip
-RUN unzip -y isaac-sim-standalone-4.5.0-linux-x86_64.zip
+RUN unzip isaac-sim-standalone-4.5.0-linux-x86_64.zip
 RUN rm -f isaac-sim-standalone-4.5.0-linux-x86_64.zip
 
 RUN mkdir /root/SemanticNav
