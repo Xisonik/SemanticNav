@@ -1,0 +1,12 @@
+[settings]
+persistent.isaac.asset_root.default = \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5\"
+exts.\"isaacsim.asset.browser\".folders = [
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Robots\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/People\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/IsaacLab\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Props\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Environments\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Materials\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Samples\",
+    \"/home/<username>/isaacsim_assets/Assets/Isaac/4.5/Isaac/Sensors\",
+]
