@@ -7,7 +7,7 @@ RUN apt install -y build-essential cmake git libssl-dev libfreetype6-dev zlib1g-
 	libbz2-dev libreadline-dev libsqlite3-dev libglib2.0-0 libfontconfig1-dev curl git \
 	libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev ncurses-term \
 	libffi-dev liblzma-dev libosmesa6-dev patchelf wget unzip
-RUN cat appendage >> /isaac-sim/apps/isaacsim.exp.base.kit
+RUN cat /root/SemanticNav/appendage >> /isaac-sim/apps/isaacsim.exp.base.kit
 RUN mkdir -p /root/miniconda3
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /root/miniconda3/miniconda.sh
 RUN bash /root/miniconda3/miniconda.sh -b -u -p /root/miniconda3
