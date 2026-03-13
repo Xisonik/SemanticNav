@@ -46,7 +46,6 @@ dependencies:
     - --extra-index-url https://pypi.org/simple
     - torch==2.7.0
     - torchvision==0.22.0
-    - torchaudio==2.7.0
     - uvicorn==0.29.0
     - -f https://data.pyg.org/whl/torch-2.7.0+cu128.html
     - torch_geometric
