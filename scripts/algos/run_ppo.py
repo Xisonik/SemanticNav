@@ -30,7 +30,7 @@ TASK_NAME = "Aloha_nav"
 EVAL = False
 VIDEO = False
 num_envs = 20
-timestepslen = 300000
+timestepslen = 640_000
 headless = True
 
 if EVAL:
@@ -91,7 +91,7 @@ models = {
 # TODO change at least learning rate. It looks to big for standard PPO implementation.
 # Maybe change some other hyperparameters.
 cfg = PPO_DEFAULT_CONFIG.copy()
-mini_batch_size = 128
+mini_batch_size = 256
 
 cfg['rollouts'] = 200
 cfg['orientation_loss_weight'] = 0.
