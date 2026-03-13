@@ -47,5 +47,4 @@ RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-ch
 RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda run ./isaaclab.sh --conda .semantic_nav)
 RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav && ./isaaclab.sh --install)
 RUN echo 'source /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav' >> /root/.bashrc
-RUN . /root/.bashrc
 CMD ["bash"]
