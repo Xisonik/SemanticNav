@@ -22,7 +22,7 @@ RUN mkdir /root/SemanticNav
 WORKDIR /root/SemanticNav
 RUN git init
 RUN git pull https://github.com/Xisonik/SemanticNav.git main:master
-RUN ls && pwd && cat /root/SemanticNav/appendage >> /isaac-sim/apps/isaacsim.exp.base.kit
+RUN cat /root/SemanticNav/appendage >> /isaac-sim/apps/isaacsim.exp.base.kit
 
 RUN pip install gdown
 RUN mkdir /root/tmp
@@ -46,17 +46,6 @@ ENV ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
 ENV ACCEPT_EULA=Y
 ENV PRIVACY_CONSENT=Y
 ENV OMNI_KIT_ALLOW_ROOT=1
-
-# Create directories required by Omniverse Kit / omni.client
-RUN mkdir -p /isaac-sim/kit/cache && \
-    mkdir -p /root/.cache/ov && \
-    mkdir -p /root/.cache/pip && \
-    mkdir -p /root/.cache/nvidia/GLCache && \
-    mkdir -p /root/.nv/ComputeCache && \
-    mkdir -p /root/.nvidia-omniverse/logs && \
-    mkdir -p /root/.nvidia-omniverse/config && \
-    mkdir -p /root/.local/share/ov/data && \
-    mkdir -p /root/Documents
 
 # Pre-create privacy consent so omni.client can access remote assets without interactive prompt
 RUN printf '[privacy]\nperformance = true\npersonalization = true\nusage = true\n' > /root/.nvidia-omniverse/config/privacy.toml
