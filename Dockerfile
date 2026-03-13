@@ -21,7 +21,7 @@ RUN rm -f isaac-sim-standalone-4.5.0-linux-x86_64.zip
 RUN mkdir /root/SemanticNav
 WORKDIR /root/SemanticNav
 RUN git init
-RUN git --mount-type=ssh -c core.sshCommand='ssh -o StrictHostKeyChecking=accept-new' pull git@github.com:Xisonik/SemanticNav.git main:master
+RUN git --mount=type=ssh -c core.sshCommand='ssh -o StrictHostKeyChecking=accept-new' pull git@github.com:Xisonik/SemanticNav.git main:master
 
 RUN pip install gdown
 RUN mkdir /root/tmp
