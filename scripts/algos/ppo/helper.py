@@ -54,5 +54,5 @@ class RolloutVideoWrapper(gymnasium.Wrapper):
                     name=f"episode_examples_{key}",
                     step=self.current_episode
                 )
-                self.video_buffer[key] = []
-                os.remove(video_path)
+                #self.video_buffer[key] = []
+                #os.remove(video_path)

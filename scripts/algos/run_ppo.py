@@ -75,7 +75,7 @@ graph_encoder = GraphEncoder(
 ).to(device)
 
 # Должно быть соразмерно с временем, за которое можно в теории добраться до целевого объекта.
-memory = RandomMemory(memory_size = 500, num_envs = env.num_envs)
+memory = RandomMemory(memory_size = 200, num_envs = env.num_envs)
 
 models = {
     "policy": Policy(
@@ -93,7 +93,7 @@ models = {
 cfg = PPO_DEFAULT_CONFIG.copy()
 mini_batch_size = 128
 
-cfg['rollouts'] = 500
+cfg['rollouts'] = 200
 cfg['orientation_loss_weight'] = 0.
 cfg['learning_epochs'] = 10
 cfg['learning_rate'] = 3e-4
@@ -144,11 +144,9 @@ def _post_with_aux(timestep, timesteps):
         _eval_active = False
         eval_sr = env.unwrapped.eval_mode(ON=False)
         experiment.log_metric("eval/success_rate", eval_sr, step=timestep)
-        acc_10, acc_20, acc_30 = print_orientation_accuracy(True)
-        if acc_10 != -1:
-            experiment.log_metric("eval/orientation_acc_10", acc_10, step=timestep)
         print(f"[EVAL] Finished. SR={eval_sr:.1f}%")
 
+agent.post_interaction = _post_with_aux
 trainer = SequentialTrainer(cfg={"timesteps": timestepslen}, env=env, agents=agent)
 trainer.train()
 #memory.save(directory="logs/skrl/memory")

@@ -232,8 +232,8 @@ class Value(DeterministicMixin, Model):
         img = states["img"].to(self.device)  
         emb = self.preprocessor(states["memory"].to(self.device))            # [B, img_dim]
         graph_flat = states["graph"].to(self.device)   # [B, N*24]
-
-        graph_emb = self.shared_graph(graph_flat, img)
+        with torch.no_grad():
+            graph_emb = self.shared_graph(graph_flat, img)
 
         x = torch.cat([emb, graph_emb], dim=-1)
         v = self.net(x)
