@@ -42,10 +42,10 @@ ENV ISAACSIM_PATH="/root/isaacsim"
 ENV ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
 WORKDIR /root/SemanticNav
 RUN ln -s ${ISAACSIM_PATH} _isaac_sim
-RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main)
-RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r)
-RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda run ./isaaclab.sh --conda .semantic_nav)
-RUN (source /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav && ./isaaclab.sh --install)
+RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main)
+RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r)
+RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda run ./isaaclab.sh --conda .semantic_nav)
+RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav && ./isaaclab.sh --install)
 RUN echo 'source /root/miniconda3/etc/profile.d/conda.sh && conda activate .semantic_nav' >> /root/.bashrc
-RUN source /root/.bashrc
+RUN . /root/.bashrc
 CMD ["bash"]
