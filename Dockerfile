@@ -38,8 +38,28 @@ RUN mv text_embeddings.pt /root/SemanticNav/source/isaaclab_tasks/isaaclab_tasks
 RUN cd /root
 RUN rm -rf /root/tmp
 
+# Required for Isaac Sim to accept EULA and privacy consent (enables omni.client HTTP access)
+ENV ACCEPT_EULA=Y
+ENV PRIVACY_CONSENT=Y
+ENV OMNI_KIT_ALLOW_ROOT=1
+
 ENV ISAACSIM_PATH="/isaac-sim"
 ENV ISAACSIM_PYTHON_EXE="${ISAACSIM_PATH}/python.sh"
+
+# Create directories required by Omniverse Kit / omni.client
+RUN mkdir -p /isaac-sim/kit/cache && \
+    mkdir -p /root/.cache/ov && \
+    mkdir -p /root/.cache/pip && \
+    mkdir -p /root/.cache/nvidia/GLCache && \
+    mkdir -p /root/.nv/ComputeCache && \
+    mkdir -p /root/.nvidia-omniverse/logs && \
+    mkdir -p /root/.nvidia-omniverse/config && \
+    mkdir -p /root/.local/share/ov/data && \
+    mkdir -p /root/Documents
+
+# Pre-create privacy consent so omni.client can access remote assets without interactive prompt
+RUN printf '[privacy]\nperformance = true\npersonalization = true\nusage = true\n' > /root/.nvidia-omniverse/config/privacy.toml
+
 WORKDIR /root/SemanticNav
 RUN ln -s ${ISAACSIM_PATH} _isaac_sim
 RUN (. /root/miniconda3/etc/profile.d/conda.sh && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main)
