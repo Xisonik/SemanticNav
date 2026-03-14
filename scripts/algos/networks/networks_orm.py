@@ -333,7 +333,7 @@ class StochasticActor(GaussianMixin, Model):
 
         img_dim = int(observation_space["img"].shape[0])
         goal_dim = int(observation_space["goal"].shape[0])
-        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM # img + graph_emb + pred_angle
+        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + 1 # img + graph_emb + pred_angle
 
         self.net = nn.Sequential(
             nn.Linear(mlp_in, 512), nn.ReLU(),
@@ -348,7 +348,7 @@ class StochasticActor(GaussianMixin, Model):
         goal = states["goal"]
         graph_flat = states["graph"]
         gt_orientation = states["orientation"]
-        
+
 
         with torch.no_grad():
             graph_emb = self.graph_encoder(graph_flat)
@@ -361,9 +361,8 @@ class StochasticActor(GaussianMixin, Model):
         # print("gt angle: ", gt_orientation)
         # print("angle: ", pred_angle)
         # random_orientation = (torch.rand_like(gt_orientation) * 2 * torch.pi) - torch.pi
-        x = torch.cat([img, goal, graph_emb], dim=-1)
+        x = torch.cat([img, goal, graph_emb, pred_angle], dim=-1)
         return self.net(x), self.log_std_parameter, {}
-
 
 class Critic(DeterministicMixin, Model):
     def __init__(self, observation_space, action_space, device,
@@ -377,7 +376,7 @@ class Critic(DeterministicMixin, Model):
 
         img_dim = int(observation_space["img"].shape[0])
         goal_dim = int(observation_space["goal"].shape[0])
-        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + self.num_actions
+        mlp_in = img_dim + goal_dim + GRAPH_EMB_DIM + self.num_actions + 1
 
         self.net = nn.Sequential(
             nn.Linear(mlp_in, 512), nn.ReLU(),
@@ -397,7 +396,7 @@ class Critic(DeterministicMixin, Model):
             graph_emb = self.graph_encoder(graph_flat)
             pred_angle, _, _ = self.orient_module(img, graph_emb)
 
-        x = torch.cat([img, goal, graph_emb, actions], dim=-1)
+        x = torch.cat([img, goal, graph_emb, actions, pred_angle], dim=-1)
         return self.net(x), {}
 
 

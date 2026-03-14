@@ -195,6 +195,9 @@ class Trainer:
                 # step the environments
                 # print("action before: ", actions)
                 next_states, rewards, terminated, truncated, infos = self.env.step(actions)
+                true_next_states = next_states
+                if 'true_next_obs' in infos and infos['true_next_obs'] is not None:
+                    true_next_states = infos['true_next_obs']
                 # print("[infos keys]", infos["log"])
                 # for agent in self.agents:
                 self.agents.track_data("Metrics / success_rate_percent", infos["log"]["Episode/success_rate"])
@@ -209,7 +212,7 @@ class Trainer:
                     states=states,
                     actions=actions,
                     rewards=rewards,
-                    next_states=next_states,
+                    next_states=true_next_states,
                     terminated=terminated,
                     truncated=truncated,
                     infos=infos,

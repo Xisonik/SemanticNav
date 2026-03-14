@@ -10,7 +10,8 @@ class RandomMemory(Memory):
         self,
         memory_size: int,
         num_envs: int = 1,
-        device: Optional[Union[str, torch.device]] = None,
+        storage_device: Optional[Union[str, torch.device]] = None,
+        sampling_device: Optional[Union[str, torch.device]] = None,
         export: bool = False,
         export_format: str = "pt",
         export_directory: str = "",
@@ -43,8 +44,8 @@ class RandomMemory(Memory):
 
         :raises ValueError: The export format is not supported
         """
-        super().__init__(memory_size, num_envs, device, export, export_format, export_directory)
-
+        super().__init__(memory_size, num_envs, storage_device, export, export_format, export_directory)
+        self.sampling_device = sampling_device
         self._replacement = replacement
 
     def sample(
@@ -84,4 +85,7 @@ class RandomMemory(Memory):
             indexes = (sequence_indexes.repeat(indexes.shape[0], 1) + indexes.view(-1, 1)).view(-1)
 
         self.sampling_indexes = indexes
-        return self.sample_by_index(names=names, indexes=indexes, mini_batches=mini_batches)
+        batch_samples = self.sample_by_index(names=names, indexes=indexes, mini_batches=mini_batches)
+        for i in range(len(batch_samples[0])):
+            batch_samples[0][i] = batch_samples[0][i].to(self.sampling_device)
+        return batch_samples

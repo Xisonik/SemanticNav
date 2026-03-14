@@ -10,11 +10,10 @@ from skrl.memories.torch import RandomMemory
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
+from scripts.algos.networks.helpers import RolloutVideoWrapper
 
 from networks.networks_orm import *
 set_seed(42)
-
-
 
 """
 - Пайплайны:
@@ -29,9 +28,9 @@ set_seed(42)
 TASK_NAME = "Aloha_nav"
 EVAL = False
 VIDEO = False
-USE_PRETRAINED = False
+USE_PRETRAINED = True
 
-num_envs = 128
+num_envs = 32
 timestepslen = 100000
 headless = True
 
@@ -44,7 +43,7 @@ if VIDEO:
     num_envs = 2
     headless = True
 else:
-    cli_args = ["--enable_cameras"]
+    cli_args = ["--enable_cameras", "--video"]
 
 if EVAL:
     # from gymnasium.wrappers import RecordVideo
@@ -69,7 +68,15 @@ if VIDEO:
         name_prefix="aloha_eval",
         episode_trigger=lambda ep: True,
     )
+from comet_ml import start
+from comet_ml.integration.pytorch import log_model
+experiment = start(
+    api_key="bbCMVUhDwSJsEqwcmhZ2MXdfE",
+    project_name="robo",
+    workspace="denmanorwat"
+)
 
+env = RolloutVideoWrapper(env, logger=experiment)
 env = wrap_env(env)
 device = env.device
 
@@ -90,10 +97,9 @@ if num_envs == 128:
 elif num_envs == 64:
     memory_size = 2000
 elif num_envs == 32:
-    memory_size = 5000
+    memory_size = 4000
 print("memory size: ", memory_size)
-memory = RandomMemory(memory_size=2000, num_envs=env.num_envs, device=device)
-
+memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, storage_device='cpu', sampling_device=device)
 models = {
     "policy": StochasticActor(
         env.observation_space, env.action_space, device,
@@ -165,13 +171,6 @@ aux_trainer = AuxModuleTrainer(
     log_interval=50,
 )
 
-from comet_ml import start
-from comet_ml.integration.pytorch import log_model
-experiment = start(
-    api_key="DRYfW6B6VtUQr9llvf3jup57R",
-    project_name="general",
-    workspace="xisonik"
-)
 _original_post = agent.post_interaction
 mode_1 = False
 def _post_with_aux(timestep, timesteps):
@@ -216,10 +215,10 @@ if not EVAL:
         # agent_path = f"{checkpoint_path}/26-02-26_16-35-01-718674_SAC/checkpoints/agent_42000.pt"
         # agent.load(agent_path)
         graph_encoder.load_state_dict(
-            torch.load(f"logs/skrl/aloha_sac/added/graph_encoder_42000.pt")
+            torch.load(f"logs/skrl/aloha_sac/added/graph_encoder_90000.pt")
         )
         orient_module.load_state_dict(
-            torch.load(f"logs/skrl/aloha_sac/added/orient_module_42000.pt")
+            torch.load(f"logs/skrl/aloha_sac/added/orient_module_90000.pt")
         )
         if mode_1:
             graph_encoder.eval()

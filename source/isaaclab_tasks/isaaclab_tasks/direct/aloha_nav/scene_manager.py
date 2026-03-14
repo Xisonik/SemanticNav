@@ -27,6 +27,7 @@ Scene Manager V3
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
+import os
 
 import torch
 import math
@@ -375,7 +376,7 @@ class SceneManager:
         self.raw_config = raw
         self.config = raw['objects']
         self.type_placements_cfg = raw.get('type_placements', {})
-        self.codebook = self._load_codebook("/home/xiso/IsaacLab/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/cdecode_dict.json")
+        self.codebook = self._load_codebook(f"{os.getcwd()}/source/isaaclab_tasks/isaaclab_tasks/direct/aloha_nav/cdecode_dict.json")
     # в __init__ SceneManager:
         base = {
             'red':[1,0,0],'green':[0,1,0],'blue':[0,0,1],
