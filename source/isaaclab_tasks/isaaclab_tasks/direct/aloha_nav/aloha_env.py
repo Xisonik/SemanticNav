@@ -573,6 +573,10 @@ class WheeledRobotEnv(DirectRLEnv):
         return observations
 
     def _pre_physics_step(self, actions: torch.Tensor):
+        first_step_mask = self.episode_length_buf <= 1  # [num_envs]
+        actions[first_step_mask] = 0.0
+        env_ids = self._robot._ALL_INDICES.clone()
+
         if not self.TURN_TASK:
             env_ids = self._robot._ALL_INDICES.clone()
             self._actions = actions.clone().clamp(-1.0, 1.0)
@@ -1006,7 +1010,7 @@ class WheeledRobotEnv(DirectRLEnv):
         joint_vel = self._robot.data.default_joint_vel[env_ids].clone()
         default_root_state = self._robot.data.default_root_state[env_ids].clone()
         default_root_state[:, :2] = self.to_global(robot_pos, env_ids)
-        default_root_state[:, 2] = 0.2
+        default_root_state[:, 2] = 0.05
         default_root_state[:, 3:7] = robot_quats
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)

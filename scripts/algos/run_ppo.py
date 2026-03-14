@@ -30,7 +30,7 @@ TASK_NAME = "Aloha_nav"
 EVAL = False
 VIDEO = False
 num_envs = 20
-timestepslen = 640_000
+timestepslen = 160_000
 headless = True
 
 if EVAL:

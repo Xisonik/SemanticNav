@@ -225,7 +225,6 @@ class Value(DeterministicMixin, Model):
             layer_init(nn.Linear(512, 1), std=1.)
         ).to(device)
 
-
     def compute(self, inputs, role):
         B = inputs["states"].shape[0]
         states = unflatten_tensorized_space(self.observation_space, inputs["states"])
