@@ -174,8 +174,9 @@ class Policy(GaussianMixin, Model):
 
         # img — это "нормализуемая" часть
         self.img_dim = int(observation_space["img"].shape[0])
+        goal_dim = int(observation_space["goal"].shape[0])
 
-        mlp_in = self.img_dim + GRAPH_EMB_DIM
+        mlp_in = self.img_dim + GRAPH_EMB_DIM + goal_dim
         self.preprocessor = nn.Sequential(layer_init(nn.Linear(2056, self.img_dim)), nn.ReLU())
         self.net = nn.Sequential(
             layer_init(nn.Linear(mlp_in, 512)),
@@ -215,8 +216,9 @@ class Value(DeterministicMixin, Model):
         self.shared_graph = shared_graph
 
         self.img_dim = int(observation_space["img"].shape[0])
+        goal_dim = int(observation_space["goal"].shape[0])
 
-        mlp_in = self.img_dim + GRAPH_EMB_DIM
+        mlp_in = self.img_dim + GRAPH_EMB_DIM + goal_dim
         self.preprocessor = nn.Sequential(layer_init(nn.Linear(2056, self.img_dim)), nn.ReLU())
         self.net = nn.Sequential(
             layer_init(nn.Linear(mlp_in, 512)),

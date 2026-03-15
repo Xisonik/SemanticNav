@@ -492,7 +492,7 @@ class WheeledRobotEnv(DirectRLEnv):
         # Вычисляем угол между векторами
         angle = torch.acos(cos_angle)
         angle = angle
-        embedding = self.memory_manager.get_observations(m=self.history_length_for_memory)
+        embedding = self.memory_manager.get_observations()
 
         # Вектор взгляда в мировых координатах
         # Знаковый угол [-π, π]
