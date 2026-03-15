@@ -126,6 +126,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
             collision_enabled=True,
         ),
     )
+    rerender_on_reset = True
     contact_sensor = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",
         update_period=0.1,
@@ -181,7 +182,7 @@ class WheeledRobotEnv(DirectRLEnv):
 
         self.set_debug_vis(self.cfg.debug_vis)
 
-        self.turn_on_controller = self.use_controller #it is not use or not use controller, it is flag for the first step
+        self.turn_on_controller = self.use_controller # It is not use or not use controller, it is flag for the first step
         self.turn_on_controller_step = 0
         self.my_episode_lenght = 256
         self.turn_off_controller_step = 0
