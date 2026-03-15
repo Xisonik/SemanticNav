@@ -192,13 +192,14 @@ class Policy(GaussianMixin, Model):
         B = inputs["states"].shape[0]
         states = unflatten_tensorized_space(self.observation_space, inputs["states"])
         img = states["img"].to(self.device)
+        goal = states['goal'].to(self.device)
         emb = self.preprocessor(states["memory"].to(self.device)) # [B, img_dim]
         graph_flat = states["graph"].to(self.device) # [B, N*24]
 
         # В PPO графовый энкодер обучается через policy
         graph_emb = self.shared_graph(graph_flat, img)  # [B, 128]
 
-        x = torch.cat([emb, graph_emb], dim=-1)
+        x = torch.cat([emb, graph_emb, goal], dim=-1)
         mu = self.net(x)
         return mu, self.log_std_parameter, {}
 
@@ -229,10 +230,11 @@ class Value(DeterministicMixin, Model):
         B = inputs["states"].shape[0]
         states = unflatten_tensorized_space(self.observation_space, inputs["states"])
         img = states["img"].to(self.device)  
+        goal = states['goal'].to(self.device)
         emb = self.preprocessor(states["memory"].to(self.device))            # [B, img_dim]
         graph_flat = states["graph"].to(self.device)   # [B, N*24]
         graph_emb = self.shared_graph(graph_flat, img)
 
-        x = torch.cat([emb, graph_emb], dim=-1)
+        x = torch.cat([emb, graph_emb, goal], dim=-1)
         v = self.net(x)
         return v, {}

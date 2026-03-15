@@ -367,7 +367,7 @@ class DirectRLEnv(gym.Env):
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).squeeze(-1)
         self.extras['true_next_obs'] = None
         if len(reset_env_ids) > 0:
-            self.extras['true_next_obs'] = self._get_observations()
+            self.extras['true_next_obs'] = self._render_current_observations_noupdate()
             # add observation noise
             # note: we apply no noise to the state space (since it is used for critic networks)
             if self.cfg.observation_noise_model:

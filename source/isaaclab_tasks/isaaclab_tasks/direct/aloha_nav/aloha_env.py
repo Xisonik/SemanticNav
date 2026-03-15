@@ -11,6 +11,7 @@ import torch
 import math
 import numpy as np
 import os
+from copy import deepcopy
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
@@ -126,6 +127,7 @@ class WheeledRobotEnvCfg(DirectRLEnvCfg):
             collision_enabled=True,
         ),
     )
+    rerender_on_reset = True
     contact_sensor = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",
         update_period=0.1,
@@ -450,6 +452,85 @@ class WheeledRobotEnv(DirectRLEnv):
         light_cfg = sim_utils.DomeLightCfg(intensity=300.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
 
+    def _render_current_observations_noupdate(self):
+        desired_pos_w = deepcopy(self._desired_pos_w)
+        if self.CAMERA:
+            camera_data = self._tiled_camera.data.output["rgb"].clone()  # Shape: (num_envs, 224, 224, 3)
+
+            imgs = camera_data.to(device=self.device, dtype=torch.float32, non_blocking=True) / 255.0
+            imgs = imgs.permute(0, 3, 1, 2)                                # (N, 3, H, W)
+            inputs = self.clip_processor(images=imgs, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            with torch.no_grad():
+                image_embeddings = self.clip_model.get_image_features(**inputs)  # (N, D)
+                image_embeddings = image_embeddings / (image_embeddings.norm(dim=1, keepdim=True) + 1e-9)
+
+        root_pos_w = self.to_local(self._robot.data.root_pos_w)
+        angle = self._robot.data.root_quat_w
+
+        root_quat_w = self._robot.data.root_quat_w  # shape [N, 4]
+
+        # Локальный вектор взгляда робота (вперёд по оси X)
+        local_forward = torch.tensor([1.0, 0.0, 0.0], device=root_quat_w.device, dtype=root_quat_w.dtype)
+        local_forward = local_forward.unsqueeze(0).repeat(root_quat_w.shape[0], 1)  # [N, 3]
+
+        # Вектор взгляда в мировых координатах
+        forward_w = self.quat_rotate(root_quat_w, local_forward)  # [N, 3]
+
+        # Вектор от робота к цели
+        root_pos_w = self._robot.data.root_pos_w  # [N, 3]
+        to_goal = desired_pos_w - root_pos_w  # [N, 3]
+
+        # Нормализуем векторы
+        forward_w_norm = torch.nn.functional.normalize(forward_w[:, :2] , dim=1)
+        to_goal_norm = torch.nn.functional.normalize(to_goal[:, :2] , dim=1)
+
+        # Косинус угла между векторами взгляда и направления на цель
+        cos_angle = torch.sum(forward_w_norm * to_goal_norm, dim=1)
+        cos_angle = torch.clamp(cos_angle, -1.0, 1.0)  # для безопасности
+
+        # Вычисляем угол между векторами
+        angle = torch.acos(cos_angle)
+        angle = angle
+        embedding = self.memory_manager.get_observations(m=self.history_length_for_memory)
+
+        # Вектор взгляда в мировых координатах
+        # Знаковый угол [-π, π]
+        root_quat_w = deepcopy(self._robot.data.root_quat_w)  # [N, 4]
+        root_pos_w = deepcopy(self._robot.data.root_pos_w)    # [N, 3]
+
+        # 1. Вектор от робота к цели в мировых координатах
+        to_goal_world = desired_pos_w - root_pos_w  # [N, 3]
+
+        # 2. Конвертируем в ЛОКАЛЬНЫЕ координаты робота
+        # Нужна обратная ротация (ротация мира в систему координат робота)
+        quat_inv = quat_conjugate(root_quat_w)  # Инвертируем кватернион
+        to_goal_local = self.quat_rotate(quat_inv, to_goal_world)  # [N, 3]
+
+        # 3. Берём только XY компоненты (игнорируем высоту Z)
+        to_goal_local_xy = to_goal_local[:, :2]  # [N, 2]
+
+        # 4. Вычисляем угол через atan2 (в плоскости XY)
+        # В системе координат робота:
+        #   X - вперёд (куда смотрит робот)
+        #   Y - влево
+        # Тогда:
+        #   atan2(y, x) даёт угол от оси X (вперёд) до вектора цели
+        relative_yaw = torch.atan2(to_goal_local_xy[:, 1], to_goal_local_xy[:, 0])  # [N]
+        # obs_img = torch.cat([embedding, ], dim=-1)
+        if self.EVAL:
+            print(f"Relative yaw 2: {torch.rad2deg(relative_yaw[0]):.1f}°")
+        # print(self.to_local(self._desired_pos_w).shape)
+        obs = {
+            "img": image_embeddings.unsqueeze(1),          # нормализуем
+            "memory": embedding.unsqueeze(1),
+            "goal": self.to_local(desired_pos_w).unsqueeze(1),
+            "orientation": relative_yaw.unsqueeze(1),
+            "graph": self.scene_embeddings # НЕ нормализуем
+        }
+        observations = {"policy": obs}
+        return observations
+
     def _get_observations(self) -> dict:
         
         self.tensorboard_step += 1
@@ -672,8 +753,8 @@ class WheeledRobotEnv(DirectRLEnv):
         goal_bonus = 5.0 * goal_reached.float()
         reward = -0.05 + turnes + collision_penalty + goal_bonus
 
-        died, _ = self._get_dones(inner=True)
-        if torch.any(died):
+        died, time_out = self._get_dones(inner=True)
+        if torch.any(torch.logical_or(died, time_out)):
             sr = self.update_success_rate(goal_reached)
 
         self.previous_distance_error = r_error
@@ -888,7 +969,7 @@ class WheeledRobotEnv(DirectRLEnv):
         died = self.goal_reached(get_num_subs=False) | self.get_contact() | self.out_of_bounds()
 
         if not inner:
-            self.episode_length_buf[died] = 0
+            self.episode_length_buf[torch.logical_or(died, time_out)] = 0
         return died, time_out
     
     def is_time_out(self, max_episode_length=256):
